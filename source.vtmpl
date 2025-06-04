@@ -1,0 +1,8 @@
+{{- with pkiCert "pki/issue/hc-example-ie" "common_name=andrei.hc.example.ie" "ttl=2m" -}}
+{{ .Cert }}{{ .CA }}{{ .Key }}
+{{ .Key | writeToFile "certs/cert.key" "" "" "0600" }}
+{{ .CA | writeToFile "certs/ca.pem" "" "" "0644" }}
+{{ .Cert | writeToFile "certs/cert.pem" "" "" "0600"}}
+{{ .CA | writeToFile "certs/cert_chain.pem" "" "" "0644" }}
+{{ .Cert | writeToFile "certs/cert_chain.pem" "" "" "0644" "append" }}
+{{- end -}}
