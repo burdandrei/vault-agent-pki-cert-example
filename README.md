@@ -5,6 +5,13 @@
 vault server -dev -dev-root-token-id=root -log-level=DEBUG
 ```
 
+### Set environment variables to work with local dev Vault
+```
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN='root'
+export VAULT_SKIP_VERIFY='true'
+```
+
 ### Enable file-based audit logging, outputting logs to stdout in raw format.
 ```
 vault audit enable file file_path=stdout log_raw=true
@@ -15,25 +22,25 @@ vault audit enable file file_path=stdout log_raw=true
 vault secrets enable pki
 ```
 
-### Generate an internal root CA with the common name 'example.ie' and a TTL (validity) of 1 year (8760 hours).
+### Generate an internal root CA with the common name 'vault.hashicorp.ibm' and a TTL (validity) of 1 year (8760 hours).
 ```
 vault write pki/root/generate/internal \
-    common_name=example.ie \
+    common_name=vault.hashicorp.ibm \
     ttl=8760h
 ```
 
-### Create a role 'hc-example-ie' that allows issuing certificates for 'hc.example.ie' and its subdomains, with a maximum TTL of 72 hours.
+### Create a role 'demoissuer' that allows issuing certificates for 'demo.vault.hashicorp.ibm' and its subdomains, with a maximum TTL of 72 hours.
 ```
-vault write pki/roles/hc-example-ie \
-    allowed_domains=hc.example.ie \
+vault write pki/roles/demoissuer \
+    allowed_domains=demo.vault.hashicorp.ibm \
     allow_subdomains=true \
     max_ttl=72h
 ```
 
-### Issue a certificate for 'andrei.hc.example.ie' with a TTL of 3 minutes using the 'hc-example-ie' role.
+### Issue a certificate for 'first.vault.hashicorp.ibm' with a TTL of 3 minutes using the 'demoissuer' role.
 ```
-vault write pki/issue/hc-example-ie \
-    common_name=andrei.hc.example.ie \
+vault write pki/issue/demoissuer \
+    common_name=first.demo.vault.hashicorp.ibm \
     ttl=3m
 ```
 

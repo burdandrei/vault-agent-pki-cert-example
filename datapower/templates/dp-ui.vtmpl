@@ -1,0 +1,7 @@
+# DP-UI Cert
+{{- with pkiCert "pki/issue/datapower" "common_name=dp-ui.datapower.hashicorp.ibm" "ttl=1h" -}}
+{{ .Cert }}{{ .CA }}{{ .Key }}
+{{ .Key | writeToFile "certs/DP-UI-privkey.pem" "" "" "0600" }}
+{{ .CA | writeToFile "certs/ca.pem" "" "" "0644" }}
+{{ .Cert | writeToFile "certs/DP-UI-sscert.pem" "" "" "0600"}}
+{{- end}}

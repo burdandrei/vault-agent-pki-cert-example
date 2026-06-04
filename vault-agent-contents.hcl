@@ -17,7 +17,7 @@ auto_auth {
 
 template {
   source = "source.vtmpl"
-  destination = "destination"
+  destination = "destination.out"
   command = "echo 'Template rendered successfully!'"
 }
 
