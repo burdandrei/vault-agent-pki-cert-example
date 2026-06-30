@@ -1,55 +1,73 @@
-# Example of running Vault Agent for requesting a PKI Certificate from Vault 
+# Vault Agent PKI Certificate Example
 
-### Start a Vault server in development mode with a fixed root token and debug logging.
-```
+This example shows how to configure a Vault PKI secrets engine and issue certificates via Vault Agent.
+Infrastructure setup (audit device, PKI engine, root CA, and role) is managed with Terraform.
+
+## Prerequisites
+
+- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
+- [Vault CLI](https://developer.hashicorp.com/vault/downloads)
+- A running Vault server (see step 1 below)
+
+---
+
+## 1. Start Vault in development mode
+
+```bash
 vault server -dev -dev-root-token-id=root -log-level=DEBUG
 ```
 
-### Set environment variables to work with local dev Vault
-```
+## 2. Export environment variables
+
+```bash
 export VAULT_ADDR='http://127.0.0.1:8200'
 export VAULT_TOKEN='root'
 export VAULT_SKIP_VERIFY='true'
 ```
 
-### Enable file-based audit logging, outputting logs to stdout in raw format.
-```
-vault audit enable file file_path=stdout log_raw=true
+## 3. Apply Terraform
+
+The Terraform configuration in `./terraform` provisions:
+
+- File audit device (stdout, raw format)
+- PKI secrets engine mounted at `pki`
+- Root CA (`vault.hashicorp.ibm`, TTL 1 year)
+- PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h)
+
+```bash
+cd terraform
+terraform init
+terraform apply
 ```
 
-### Enable the PKI secrets engine in Vault.
-```
-vault secrets enable pki
-```
+After a successful apply, Terraform prints the outputs:
 
-### Generate an internal root CA with the common name 'vault.hashicorp.ibm' and a TTL (validity) of 1 year (8760 hours).
-```
-vault write pki/root/generate/internal \
-    common_name=vault.hashicorp.ibm \
-    ttl=8760h
-```
+| Output           | Description                            |
+| ---------------- | -------------------------------------- |
+| `pki_mount_path` | Mount path of the PKI engine           |
+| `root_ca_serial` | Serial of the generated root CA        |
+| `role_name`      | PKI role name for issuing certs        |
+| `issue_path`     | Vault path for certificate issuance    |
 
-### Create a role 'demoissuer' that allows issuing certificates for 'demo.vault.hashicorp.ibm' and its subdomains, with a maximum TTL of 72 hours.
-```
-vault write pki/roles/demoissuer \
-    allowed_domains=demo.vault.hashicorp.ibm \
-    allow_subdomains=true \
-    max_ttl=72h
-```
+## 4. Start Vault Agent
 
-### Issue a certificate for 'first.vault.hashicorp.ibm' with a TTL of 3 minutes using the 'demoissuer' role.
-```
-vault write pki/issue/demoissuer \
-    common_name=first.demo.vault.hashicorp.ibm \
-    ttl=3m
-```
-
-### Start a Vault agent with debug logging, using the specified configuration file.
-```
+```bash
 vault agent -log-level debug -config=./vault-agent-contents.hcl
 ```
 
-### Display the validity dates of the certificate in 'cert.pem' without showing the certificate content.
-```
+Vault Agent will use the `issue_path` from the Terraform output (e.g. `pki/issue/demoissuer`) to periodically request and renew certificates, writing them to `certs/`.
+
+## 5. Verify the issued certificate
+
+```bash
 openssl x509 -in certs/cert.pem -noout -dates
+```
+
+---
+
+## Teardown
+
+```bash
+cd terraform
+terraform destroy
 ```
