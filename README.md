@@ -30,9 +30,11 @@ export VAULT_SKIP_VERIFY='true'
 The Terraform configuration in `./terraform` provisions:
 
 - File audit device (stdout, raw format)
-- PKI secrets engine mounted at `pki`
+- Root PKI secrets engine mounted at `pki`
 - Root CA (`vault.hashicorp.ibm`, TTL 1 year)
-- PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h)
+- Intermediate PKI secrets engine mounted at `pki_int` (signed by the root CA)
+- PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h) — issues from intermediate
+- PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 
 ```bash
 cd terraform
@@ -42,12 +44,14 @@ terraform apply
 
 After a successful apply, Terraform prints the outputs:
 
-| Output           | Description                            |
-| ---------------- | -------------------------------------- |
-| `pki_mount_path` | Mount path of the PKI engine           |
-| `root_ca_serial` | Serial of the generated root CA        |
-| `role_name`      | PKI role name for issuing certs        |
-| `issue_path`     | Vault path for certificate issuance    |
+| Output                | Description                                   |
+| --------------------- | --------------------------------------------- |
+| `pki_mount_path`      | Mount path of the root PKI engine             |
+| `pki_int_mount_path`  | Mount path of the intermediate PKI engine     |
+| `root_ca_common_name` | Common name of the root CA                    |
+| `role_name`           | PKI role name for issuing certs               |
+| `issue_path`          | Vault path for demoissuer certificate issuance |
+| `datapower_issue_path`| Vault path for DataPower certificate issuance |
 
 ## 4. Start Vault Agent
 
@@ -55,7 +59,7 @@ After a successful apply, Terraform prints the outputs:
 vault agent -log-level debug -config=./vault-agent-contents.hcl
 ```
 
-Vault Agent will use the `issue_path` from the Terraform output (e.g. `pki/issue/demoissuer`) to periodically request and renew certificates, writing them to `certs/`.
+Vault Agent will use the `issue_path` from the Terraform output (`pki_int/issue/demoissuer`) to periodically request and renew certificates, writing them to `certs/`.
 
 ## 5. Verify the issued certificate
 

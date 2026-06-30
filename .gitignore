@@ -3,5 +3,7 @@
 *.key
 *.out
 .terraform
-.gitignore
-.gitignore
+vault.audit
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+pidfile

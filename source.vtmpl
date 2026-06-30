@@ -1,4 +1,4 @@
-{{- with pkiCert "pki/issue/demoissuer" "common_name=auto.demo.vault.hashicorp.ibm" "ttl=2m" -}}
+{{- with pkiCert "pki_int/issue/demoissuer" "common_name=auto.demo.vault.hashicorp.ibm" "ttl=2m" -}}
 {{ .Cert }}{{ .CA }}{{ .Key }}
 {{ .Key | writeToFile "certs/cert.key" "" "" "0600" }}
 {{ .CA | writeToFile "certs/ca.pem" "" "" "0644" }}

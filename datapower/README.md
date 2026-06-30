@@ -13,6 +13,7 @@ The flow in this directory is:
 
 ## Prerequisites
 
+- [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
 - Vault CLI installed
 - IBM DataPower container image access
 - Docker available locally
@@ -48,39 +49,24 @@ datapower/
 
 ## Vault Setup
 
-From the repository root, start Vault in dev mode:
+From the repository root, start Vault in dev mode and export the required environment variables:
 
 ```bash
 vault server -dev -dev-root-token-id=root -log-level=DEBUG
 ```
 
-Enable audit logging:
-
 ```bash
-vault audit enable file file_path=stdout log_raw=true
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN='root'
+export VAULT_SKIP_VERIFY='true'
 ```
 
-Enable PKI:
+Then apply Terraform from the repository root to provision the audit device, PKI engine, root CA, and all PKI roles (including `datapower`):
 
 ```bash
-vault secrets enable pki
-```
-
-Generate a root CA:
-
-```bash
-vault write pki/root/generate/internal \
-  common_name=vault.hashicorp.ibm \
-  ttl=8760h
-```
-
-Create a role:
-
-```bash
-vault write pki/roles/datapower \
-  allowed_domains=datapower.hashicorp.ibm \
-  allow_subdomains=true \
-  max_ttl=72h
+cd terraform
+terraform init
+terraform apply
 ```
 
 ## Generate Initial Certificates Before Starting DataPower
