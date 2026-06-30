@@ -6,18 +6,16 @@ vault {
 
 auto_auth {
   method {
-     type = "token_file"
+    type = "token_file"
 
     config = {
       token_file_path = ".vault-token"
     }
   }
-
 }
 
 template {
-  source = "templates/source.vtmpl"
-  destination = "certs/destination.out"
-  command = "echo 'Template rendered successfully!'"
+  source      = "templates/nginx-cert.vtmpl"
+  destination = "certs/nginx-cert.pem"
+  command     = "bash nginx/reload-nginx.sh"
 }
-

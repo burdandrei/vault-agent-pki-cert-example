@@ -97,3 +97,14 @@ resource "vault_pki_secret_backend_role" "datapower" {
   allow_subdomains = true
   max_ttl          = "259200" # 72h
 }
+
+# ---------------------------------------------------------------------------
+# PKI role – nginx (nginx/templates/nginx-cert.vtmpl)  –  issues from intermediate
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_role" "nginx" {
+  backend          = vault_mount.pki_int.path
+  name             = "nginx"
+  allowed_domains  = ["nginx.hashicorp.ibm"]
+  allow_subdomains = true
+  max_ttl          = "259200" # 72h
+}

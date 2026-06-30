@@ -1,9 +1,10 @@
 # Vault Agent PKI Certificate Example
 
-This repository demonstrates two Vault Agent workflows:
+This repository demonstrates three Vault Agent workflows:
 
 1. **Basic** — Vault Agent requests and renews a PKI certificate from Vault.
 2. **DataPower** — Vault Agent generates certificates for IBM DataPower, starts the container, and keeps selected certificates updated via the DataPower REST Management API.
+3. **nginx** — Vault Agent provisions TLS certificates for nginx and reloads the server on each renewal.
 
 Infrastructure (audit device, PKI engine, root CA, intermediate CA, and roles) is managed with Terraform.
 
@@ -11,6 +12,7 @@ Infrastructure (audit device, PKI engine, root CA, intermediate CA, and roles) i
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
 - [Vault CLI](https://developer.hashicorp.com/vault/downloads)
+- nginx installed and in `$PATH` *(nginx flow only)*
 - IBM DataPower container image access *(DataPower flow only)*
 - Docker *(DataPower flow only)*
 - `curl` available *(DataPower flow only)*
@@ -41,6 +43,7 @@ The Terraform configuration in `./terraform` provisions:
 - Intermediate PKI secrets engine mounted at `pki_int` (signed by the root CA)
 - PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 - PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h) — issues from intermediate
+- PKI role `nginx` (allowed domain `nginx.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 
 ```bash
 cd terraform
@@ -58,6 +61,7 @@ After a successful apply, Terraform prints the outputs:
 | `role_name`            | PKI role name for issuing certs                |
 | `issue_path`           | Vault path for demoissuer certificate issuance |
 | `datapower_issue_path` | Vault path for DataPower certificate issuance  |
+| `nginx_issue_path`     | Vault path for nginx certificate issuance      |
 
 ---
 
@@ -229,6 +233,57 @@ curl -k -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
 **Upload to DataPower fails** — Verify DataPower is running, REST Management API is reachable on `https://localhost:5554`, credentials match the container, and the expected cert files exist in `certs/`.
 
 **TLS warnings from curl** — [`datapower/upload-certs-to-datapower.sh`](datapower/upload-certs-to-datapower.sh) uses `curl -k`, which disables certificate verification for local testing.
+
+---
+
+## nginx Flow — TLS Certificate Auto-Renewal
+
+Vault Agent provisions a TLS certificate for nginx and reloads the server whenever the certificate is renewed.
+
+### Directory structure
+
+```text
+./
+├── nginx.hcl                       # Vault Agent config for nginx cert renewal
+├── templates/
+│   └── nginx-cert.vtmpl            # Vault Agent template — writes cert + chain
+├── nginx/
+│   ├── nginx.conf                  # nginx config: HTTP→HTTPS redirect + TLS listener
+│   └── reload-nginx.sh             # reloads nginx after cert renewal
+```
+
+### Step 1 — Start nginx
+
+Start nginx pointing at the config in this repo:
+
+```bash
+nginx -c "$(pwd)/nginx/nginx.conf"
+```
+
+> The config references `../certs/nginx-cert.pem` and `../certs/nginx-privkey.pem` relative to the `nginx/` directory, which resolves to `certs/` at the repo root.
+
+### Step 2 — Run Vault Agent
+
+```bash
+vault agent -log-level debug -config=./nginx.hcl
+```
+
+[`nginx.hcl`](nginx.hcl) renders [`templates/nginx-cert.vtmpl`](templates/nginx-cert.vtmpl) to `certs/nginx-cert.pem`, writing the private key to `certs/nginx-privkey.pem` via `writeToFile`, then runs [`nginx/reload-nginx.sh`](nginx/reload-nginx.sh) to signal nginx to pick up the new certificate without dropping connections.
+
+### How it works
+
+| File                              | Purpose                                                            |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `nginx/nginx.conf`                | Port 80 → 301 redirect; port 443 TLS listener                      |
+| `templates/nginx-cert.vtmpl`      | Requests cert from `pki_int/issue/nginx`, writes key + cert+chain  |
+| `nginx/reload-nginx.sh`           | Runs `nginx -s reload` after each cert write                       |
+| `nginx.hcl`                       | Vault Agent config wiring the above together                       |
+
+### Verify the certificate
+
+```bash
+openssl x509 -in certs/nginx-cert.pem -noout -dates
+```
 
 ---
 

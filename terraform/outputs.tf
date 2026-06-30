@@ -27,3 +27,8 @@ output "datapower_issue_path" {
   description = "Full Vault path for issuing DataPower certificates."
   value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.datapower.name}"
 }
+
+output "nginx_issue_path" {
+  description = "Full Vault path for issuing nginx certificates."
+  value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.nginx.name}"
+}
