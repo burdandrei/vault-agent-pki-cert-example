@@ -17,5 +17,9 @@ auto_auth {
 template {
   source      = "templates/dp-demo-1m.vtmpl"
   destination = "certs/demo-1m.out"
-  command     = "bash datapower/upload-certs-to-datapower.sh"
+
+  exec {
+    command = ["bash", "datapower/upload-certs-to-datapower.sh"]
+    timeout = "30s"
+  }
 }

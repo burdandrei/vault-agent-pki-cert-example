@@ -17,5 +17,9 @@ auto_auth {
 template {
   source      = "templates/nginx-cert.vtmpl"
   destination = "certs/nginx-cert.pem"
-  command     = "bash nginx/reload-nginx.sh"
+
+  exec {
+    command = ["bash", "nginx/reload-nginx.sh"]
+    timeout = "30s"
+  }
 }
