@@ -71,7 +71,7 @@ After a successful apply, Terraform prints the outputs:
 ### Start Vault Agent
 
 ```bash
-vault agent -log-level debug -config=./echo.hcl
+vault agent -config=./echo.hcl #-log-level debug
 ```
 
 Vault Agent uses `pki_int/issue/demoissuer` to periodically request and renew certificates, writing them to `certs/`.
@@ -109,7 +109,7 @@ openssl x509 -in certs/cert.pem -noout -dates
 Run Vault Agent once from the repository root to render the initial certificate set before starting DataPower:
 
 ```bash
-vault agent -log-level debug -config=./datapower-init.hcl -exit-after-auth
+vault agent -config=./datapower-init.hcl -exit-after-auth #-log-level debug
 ```
 
 [`datapower-init.hcl`](datapower-init.hcl) renders:
@@ -141,7 +141,7 @@ Default credentials: `admin` / `admin`.
 ### Step 3 — Run continuous Vault Agent updates
 
 ```bash
-vault agent -log-level debug -config=./datapower.hcl
+vault agent -config=./datapower.hcl #-log-level debug
 ```
 
 [`datapower.hcl`](datapower.hcl) continuously renders `templates/demo.vtmpl` → `certs/demo.out` and runs [`datapower/upload-certs-to-datapower.sh`](datapower/upload-certs-to-datapower.sh) after each renewal.

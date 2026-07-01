@@ -15,7 +15,7 @@ auto_auth {
 }
 
 template {
-  source      = "templates/dp-demo.vtmpl"
-  destination = "certs/demo.out"
+  source      = "templates/dp-demo-1m.vtmpl"
+  destination = "certs/demo-1m.out"
   command     = "bash datapower/upload-certs-to-datapower.sh"
 }
