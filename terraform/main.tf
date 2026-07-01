@@ -50,7 +50,7 @@ resource "vault_mount" "pki_int" {
 }
 
 # ---------------------------------------------------------------------------
-# Generate a CSR from the intermediate CA
+# Generate a CSR from the intermediate CA (key stays internal to Vault)
 # ---------------------------------------------------------------------------
 resource "vault_pki_secret_backend_intermediate_cert_request" "csr" {
   backend     = vault_mount.pki_int.path
@@ -74,6 +74,39 @@ resource "vault_pki_secret_backend_root_sign_intermediate" "signed" {
 resource "vault_pki_secret_backend_intermediate_set_signed" "set" {
   backend     = vault_mount.pki_int.path
   certificate = vault_pki_secret_backend_root_sign_intermediate.signed.certificate
+}
+
+# ---------------------------------------------------------------------------
+# Configure issuing / CRL URLs on the root CA
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_config_urls" "pki_urls" {
+  backend                 = vault_mount.pki.path
+  issuing_certificates    = ["http://127.0.0.1:8200/v1/pki/ca"]
+  crl_distribution_points = ["http://127.0.0.1:8200/v1/pki/crl"]
+}
+
+# ---------------------------------------------------------------------------
+# Configure issuing / CRL URLs on the intermediate CA
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_config_urls" "pki_int_urls" {
+  backend                 = vault_mount.pki_int.path
+  issuing_certificates    = ["http://127.0.0.1:8200/v1/pki_int/ca"]
+  crl_distribution_points = ["http://127.0.0.1:8200/v1/pki_int/crl"]
+
+  depends_on = [vault_pki_secret_backend_intermediate_set_signed.set]
+}
+
+# ---------------------------------------------------------------------------
+# Make the imported intermediate issuer the default.
+# default_follows_latest_issuer=true ensures the issuer created by set_signed
+# is automatically promoted to default after import.
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_config_issuers" "pki_int_default_issuer" {
+  backend                       = vault_mount.pki_int.path
+  default                       = vault_pki_secret_backend_intermediate_set_signed.set.imported_issuers[0]
+  default_follows_latest_issuer = true
+
+  depends_on = [vault_pki_secret_backend_intermediate_set_signed.set]
 }
 
 # ---------------------------------------------------------------------------
