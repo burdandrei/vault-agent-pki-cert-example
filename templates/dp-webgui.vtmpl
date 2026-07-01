@@ -1,0 +1,7 @@
+# WebGUI Cert
+{{- with pkiCert "pki_int/issue/datapower" "common_name=webgui.datapower.hashicorp.ibm" "ttl=1h" -}}
+{{ .Cert }}{{ .CA }}{{ .Key }}
+{{ .Key | writeToFile "datapower/certs/webgui-privkey.pem" "" "" "0600" }}
+{{ .CA | writeToFile "datapower/certs/ca.pem" "" "" "0644" }}
+{{ .Cert | writeToFile "datapower/certs/webgui-sscert.pem" "" "" "0600"}}
+{{- end}}

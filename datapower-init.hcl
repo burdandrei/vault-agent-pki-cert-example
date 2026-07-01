@@ -16,16 +16,16 @@ auto_auth {
 }
 
 template {
-  source = "templates/webgui.vtmpl"
-  destination = "certs/webgui.out"
+  source = "templates/dp-webgui.vtmpl"
+  destination = "datapower/certs/webgui.out"
 }
 
 template {
   source = "templates/dp-ui.vtmpl"
-  destination = "certs/dp-ui.out"
+  destination = "datapower/certs/dp-ui.out"
 }
 
 template {
-  source = "templates/demo.vtmpl"
-  destination = "certs/demo.out"
+  source = "templates/dp-demo.vtmpl"
+  destination = "datapower/certs/demo.out"
 }
