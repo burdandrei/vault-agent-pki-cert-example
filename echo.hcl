@@ -16,8 +16,12 @@ auto_auth {
 }
 
 template {
-  source = "templates/source.vtmpl"
+  source      = "templates/source.vtmpl"
   destination = "certs/destination.out"
-  command = "echo 'Template rendered successfully!' && openssl x509 -in certs/cert.pem -noout -dates"
+
+  exec {
+    command = ["bash", "-c", "echo 'Template rendered successfully!' && openssl x509 -in certs/cert.pem -noout -dates"]
+    timeout = "30s"
+  }
 }
 
