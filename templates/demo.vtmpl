@@ -1,5 +1,5 @@
 # WebGUI Cert
-{{- with pkiCert "pki/issue/datapower" "common_name=demo.datapower.hashicorp.ibm" "ttl=2m" -}}
+{{- with pkiCert "pki_int/issue/datapower" "common_name=demo.datapower.hashicorp.ibm" "ttl=2m" -}}
 {{ .Cert }}{{ .CA }}{{ .Key }}
 {{ .Key | writeToFile "certs/demo-privkey.pem" "" "" "0600" }}
 {{ .Cert | writeToFile "certs/demo-sscert.pem" "" "" "0600"}}

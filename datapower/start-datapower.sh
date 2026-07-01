@@ -3,15 +3,10 @@ set -e
 SOURCE_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd $SOURCE_PATH
 
-#chmod -R 777 $PWD/mydatapower
 
-#podman machine stop
-#podman machine set --memory 8192
-#podman machine start
 
-#podman run --privileged --user root -it --platform linux/amd64 \
-docker rm my-datapower --force || true
-docker run --privileged --user root --platform linux/amd64 \
+podman rm my-datapower --force || true
+podman run --privileged --user root --platform linux/amd64 \
   --name my-datapower \
   -e DATAPOWER_ACCEPT_LICENSE="true" \
   -e DATAPOWER_INTERACTIVE="true" \
