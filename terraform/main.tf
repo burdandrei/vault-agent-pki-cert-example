@@ -113,31 +113,46 @@ resource "vault_pki_secret_backend_config_issuers" "pki_int_default_issuer" {
 # PKI role – demoissuer (vault-agent-contents.hcl)  –  issues from intermediate
 # ---------------------------------------------------------------------------
 resource "vault_pki_secret_backend_role" "demoissuer" {
-  backend          = vault_mount.pki_int.path
-  name             = "demoissuer"
-  allowed_domains  = ["demo.vault.hashicorp.ibm"]
-  allow_subdomains = true
-  max_ttl          = "259200" # 72h
+  backend             = vault_mount.pki_int.path
+  name                = "demoissuer"
+  allowed_domains     = ["demo.vault.hashicorp.ibm"]
+  allow_bare_domains  = true
+  allow_subdomains    = true
+  max_ttl             = "259200" # 72h
 }
 
 # ---------------------------------------------------------------------------
 # PKI role – datapower (datapower/templates/*.vtmpl)  –  issues from intermediate
 # ---------------------------------------------------------------------------
 resource "vault_pki_secret_backend_role" "datapower" {
-  backend          = vault_mount.pki_int.path
-  name             = "datapower"
-  allowed_domains  = ["datapower.hashicorp.ibm"]
-  allow_subdomains = true
-  max_ttl          = "259200" # 72h
+  backend             = vault_mount.pki_int.path
+  name                = "datapower"
+  allowed_domains     = ["datapower.hashicorp.ibm"]
+  allow_bare_domains  = true
+  allow_subdomains    = true
+  max_ttl             = "259200" # 72h
 }
 
 # ---------------------------------------------------------------------------
 # PKI role – nginx (nginx/templates/nginx-cert.vtmpl)  –  issues from intermediate
 # ---------------------------------------------------------------------------
 resource "vault_pki_secret_backend_role" "nginx" {
-  backend          = vault_mount.pki_int.path
-  name             = "nginx"
-  allowed_domains  = ["nginx.hashicorp.ibm"]
-  allow_subdomains = true
-  max_ttl          = "259200" # 72h
+  backend             = vault_mount.pki_int.path
+  name                = "nginx"
+  allowed_domains     = ["nginx.hashicorp.ibm"]
+  allow_bare_domains  = true
+  allow_subdomains    = true
+  max_ttl             = "259200" # 72h
+}
+
+# ---------------------------------------------------------------------------
+# PKI role – haproxy  –  issues from intermediate (Vault Agent pkiCert)
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_role" "haproxy" {
+  backend             = vault_mount.pki_int.path
+  name                = "haproxy"
+  allowed_domains     = ["haproxy.hashicorp.ibm"]
+  allow_bare_domains  = true
+  allow_subdomains    = true
+  max_ttl             = "259200" # 72h
 }

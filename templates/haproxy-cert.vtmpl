@@ -1,0 +1,4 @@
+{{- with pkiCert "pki_int/issue/haproxy" "common_name=haproxy.hashicorp.ibm" "ttl=1h" -}}
+{{- .Key | writeToFile "certs/haproxy-privkey.pem" "" "" "0600" -}}
+{{ .Cert }}{{ .CA }}
+{{- end}}

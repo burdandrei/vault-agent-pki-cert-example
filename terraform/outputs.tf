@@ -32,3 +32,8 @@ output "nginx_issue_path" {
   description = "Full Vault path for issuing nginx certificates."
   value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.nginx.name}"
 }
+
+output "haproxy_issue_path" {
+  description = "Full Vault path for issuing HAProxy certificates."
+  value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.haproxy.name}"
+}

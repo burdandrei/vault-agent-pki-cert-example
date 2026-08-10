@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vault Agent PKI — nginx</title>
+  <style>
+    body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; background: #f7f8fa; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 2.5rem 3rem; max-width: 480px; width: 100%; text-align: center; }
+    .badge { display: inline-block; background: #dcfce7; color: #166534; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.75rem; border-radius: 999px; margin-bottom: 1.25rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    h1 { font-size: 1.5rem; color: #1f2328; margin: 0 0 0.5rem; }
+    p { color: #57606a; font-size: 0.95rem; line-height: 1.6; margin: 0.25rem 0; }
+    .server { margin-top: 1.5rem; font-size: 0.8rem; color: #57606a; border-top: 1px solid #e5e7eb; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">&#10003; TLS Active</div>
+    <h1>nginx is running</h1>
+    <p>Certificate provisioned by <strong>Vault Agent PKI</strong>.</p>
+    <p>This connection is encrypted with a Vault-issued TLS certificate.</p>
+    <div class="server">nginx &middot; Vault Agent PKI Example</div>
+  </div>
+</body>
+</html>

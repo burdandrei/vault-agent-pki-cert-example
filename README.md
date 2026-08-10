@@ -1,10 +1,11 @@
 # Vault Agent PKI Certificate Example
 
-This repository demonstrates three Vault Agent workflows:
+This repository demonstrates four Vault Agent workflows:
 
 1. **Basic** — Vault Agent requests and renews a PKI certificate from Vault.
 2. **DataPower** — Vault Agent generates certificates for IBM DataPower, starts the container, and keeps selected certificates updated via the DataPower REST Management API.
 3. **nginx** — Vault Agent provisions TLS certificates for nginx and reloads the server on each renewal.
+4. **HAProxy** — Vault Agent provisions TLS certificates for HAProxy and reloads the server on each renewal.
 
 Infrastructure (audit device, PKI engine, root CA, intermediate CA, and roles) is managed with Terraform.
 
@@ -12,9 +13,8 @@ Infrastructure (audit device, PKI engine, root CA, intermediate CA, and roles) i
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
 - [Vault CLI](https://developer.hashicorp.com/vault/downloads)
-- nginx installed and in `$PATH` *(nginx flow only)*
+- [Podman](https://podman.io/docs/installation) *(nginx, HAProxy, and DataPower flows)*
 - IBM DataPower container image access *(DataPower flow only)*
-- Docker *(DataPower flow only)*
 - `curl` available *(DataPower flow only)*
 
 ---
@@ -34,6 +34,12 @@ export VAULT_SKIP_VERIFY='true'
 export VAULT_LICENSE_PATH="~/.vault-license.hclic"
 ```
 
+Vault dev mode also writes the root token to `~/.vault-token`. Copy it to the repo root so Vault Agent can find it:
+
+```bash
+cp ~/.vault-token .vault-token
+```
+
 ## 3. Apply Terraform
 
 The Terraform configuration in `./terraform` provisions:
@@ -45,6 +51,7 @@ The Terraform configuration in `./terraform` provisions:
 - PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 - PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 - PKI role `nginx` (allowed domain `nginx.hashicorp.ibm`, max TTL 72h) — issues from intermediate
+- PKI role `haproxy` (allowed domain `haproxy.hashicorp.ibm`, max TTL 72h) — issues from intermediate
 
 ```bash
 cd terraform
@@ -63,6 +70,7 @@ After a successful apply, Terraform prints the outputs:
 | `issue_path`           | Vault path for demoissuer certificate issuance |
 | `datapower_issue_path` | Vault path for DataPower certificate issuance  |
 | `nginx_issue_path`     | Vault path for nginx certificate issuance      |
+| `haproxy_issue_path`   | Vault path for HAProxy certificate issuance    |
 
 ---
 
@@ -93,9 +101,9 @@ openssl x509 -in certs/cert.pem -noout -dates
 ├── datapower-init.hcl          # one-shot agent config: renders all initial certs and exits
 ├── datapower.hcl               # continuous agent config: renews demo cert and uploads to DataPower
 ├── templates/
-│   ├── webgui.vtmpl            # WebGUI certificate template
+│   ├── dp-webgui.vtmpl         # WebGUI certificate template
 │   ├── dp-ui.vtmpl             # DP-UI certificate template
-│   └── demo.vtmpl              # Demo TLS certificate template
+│   └── dp-demo.vtmpl           # Demo TLS certificate template
 ├── datapower/
 │   ├── start-datapower.sh
 │   ├── upload-certs-to-datapower.sh
@@ -250,41 +258,142 @@ Vault Agent provisions a TLS certificate for nginx and reloads the server whenev
 │   └── nginx-cert.vtmpl            # Vault Agent template — writes cert + chain
 ├── nginx/
 │   ├── nginx.conf                  # nginx config: HTTP→HTTPS redirect + TLS listener
-│   └── reload-nginx.sh             # reloads nginx after cert renewal
+│   ├── start-nginx.sh              # starts the nginx Podman container
+│   ├── reload-nginx.sh             # reloads nginx inside the container after cert renewal
+│   └── success.html                # page served over HTTPS
 ```
 
-### Step 1 — Start nginx
+### Step 1 — Issue the initial certificate
 
-Start nginx pointing at the config in this repo:
+Run Vault Agent once to populate the cert files before starting the container:
 
 ```bash
-nginx -c "$(pwd)/nginx/nginx.conf"
+vault agent -config=./nginx.hcl -exit-after-auth
 ```
 
-> The config references `../certs/nginx-cert.pem` and `../certs/nginx-privkey.pem` relative to the `nginx/` directory, which resolves to `certs/` at the repo root.
+### Step 2 — Start the nginx container
 
-### Step 2 — Run Vault Agent
+The container mounts `nginx/nginx.conf`, `nginx/success.html`, and `certs/` read-only:
+
+```bash
+bash nginx/start-nginx.sh
+```
+
+### Step 3 — Run Vault Agent for continuous renewal
 
 ```bash
 vault agent -log-level debug -config=./nginx.hcl
 ```
 
-[`nginx.hcl`](nginx.hcl) renders [`templates/nginx-cert.vtmpl`](templates/nginx-cert.vtmpl) to `certs/nginx-cert.pem`, writing the private key to `certs/nginx-privkey.pem` via `writeToFile`, then runs [`nginx/reload-nginx.sh`](nginx/reload-nginx.sh) to signal nginx to pick up the new certificate without dropping connections.
+[`nginx.hcl`](nginx.hcl) renders [`templates/nginx-cert.vtmpl`](templates/nginx-cert.vtmpl) to `certs/nginx-cert.pem`, writing the private key to `certs/nginx-privkey.pem` via `writeToFile`, then runs [`nginx/reload-nginx.sh`](nginx/reload-nginx.sh) which sends `nginx -s reload` inside the running container. On first run (`-exit-after-auth`) the exec command errors because the container isn't started yet — this is expected.
 
 ### How it works
 
-| File                              | Purpose                                                            |
-| --------------------------------- | ------------------------------------------------------------------ |
-| `nginx/nginx.conf`                | Port 80 → 301 redirect; port 443 TLS listener                      |
-| `templates/nginx-cert.vtmpl`      | Requests cert from `pki_int/issue/nginx`, writes key + cert+chain  |
-| `nginx/reload-nginx.sh`           | Runs `nginx -s reload` after each cert write                       |
-| `nginx.hcl`                       | Vault Agent config wiring the above together                       |
+| File                              | Purpose                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `nginx/nginx.conf`                | Port 80 → 301 redirect; port 443 TLS listener; cert paths are `/certs/…`    |
+| `nginx/start-nginx.sh`            | Starts `nginx:alpine` container via Podman, mounts config + certs            |
+| `nginx/success.html`              | Static HTML page served at `/`                                               |
+| `templates/nginx-cert.vtmpl`      | Requests cert from `pki_int/issue/nginx`, writes key + cert+chain            |
+| `nginx/reload-nginx.sh`           | Runs `podman exec nginx-vault nginx -s reload` after each cert write         |
+| `nginx.hcl`                       | Vault Agent config wiring the above together                                 |
 
 ### Verify the certificate
 
 ```bash
 openssl x509 -in certs/nginx-cert.pem -noout -dates
 ```
+
+---
+
+## HAProxy Flow — TLS Certificate Auto-Renewal
+
+Vault Agent provisions a TLS certificate for HAProxy and reloads the server whenever the certificate is renewed.
+
+### Directory structure
+
+```text
+./
+├── haproxy-init.hcl                # one-shot agent config: renders initial cert and exits
+├── haproxy.hcl                     # continuous agent config: renews cert and reloads HAProxy
+├── templates/
+│   └── haproxy-cert.vtmpl          # Vault Agent template — writes cert + chain + private key
+├── haproxy/
+│   ├── haproxy.cfg                 # HAProxy config: TLS frontend using /certs/haproxy-bundle.pem
+│   ├── start-haproxy.sh            # starts the HAProxy Podman container
+│   ├── reload-haproxy.sh           # assembles bundle and sends SIGHUP to container
+│   └── success.html                # page served over HTTPS
+```
+
+### Step 1 — Generate the initial certificate
+
+Run Vault Agent once from the repository root to populate the cert files before starting HAProxy:
+
+```bash
+vault agent -config=./haproxy-init.hcl -exit-after-auth
+```
+
+[`haproxy-init.hcl`](haproxy-init.hcl) renders [`templates/haproxy-cert.vtmpl`](templates/haproxy-cert.vtmpl), writing:
+
+- `certs/haproxy-cert.pem` — certificate + CA chain (template destination)
+- `certs/haproxy-privkey.pem` — private key (written via `writeToFile`)
+
+### Step 2 — Assemble the initial bundle and start HAProxy
+
+Assemble the bundle first so the container has a valid cert on startup, then start the container:
+
+```bash
+cat certs/haproxy-privkey.pem certs/haproxy-cert.pem > certs/haproxy-bundle.pem
+bash haproxy/start-haproxy.sh
+```
+
+The container mounts `haproxy/haproxy.cfg` and `certs/` read-only at `/certs`.
+
+### Step 3 — Run continuous Vault Agent renewal
+
+```bash
+vault agent -config=./haproxy.hcl
+```
+
+[`haproxy.hcl`](haproxy.hcl) continuously renders [`templates/haproxy-cert.vtmpl`](templates/haproxy-cert.vtmpl) and runs [`haproxy/reload-haproxy.sh`](haproxy/reload-haproxy.sh) after each renewal, which:
+
+1. Reassembles `certs/haproxy-bundle.pem` with the new key and cert
+2. Sends `SIGHUP` to the `haproxy-vault` container so it picks up the new bundle
+
+### How it works
+
+| File                              | Purpose                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `haproxy-init.hcl`                | One-shot: renders initial cert files before HAProxy starts                   |
+| `haproxy.hcl`                     | Continuous: renews cert and triggers reload on each renewal                  |
+| `haproxy/start-haproxy.sh`        | Starts `haproxy:alpine` container via Podman, mounts config + certs          |
+| `haproxy/success.html`            | Static HTML page served at `/`                                               |
+| `templates/haproxy-cert.vtmpl`    | Requests cert from `pki_int/issue/haproxy`, writes key + cert+chain          |
+| `haproxy/reload-haproxy.sh`       | Assembles bundle, sends `podman kill --signal=HUP haproxy-vault`             |
+| `haproxy/haproxy.cfg`             | HAProxy config; cert path is `/certs/haproxy-bundle.pem` (container path)    |
+
+### Verify the certificate
+
+```bash
+openssl x509 -in certs/haproxy-cert.pem -noout -dates
+```
+
+---
+
+## Port Reference
+
+All container-based flows use distinct host ports so they can run simultaneously.
+
+| Flow      | Service          | Host port | Container port |
+| --------- | ---------------- | --------- | -------------- |
+| nginx     | HTTP (redirect)  | `8080`    | `80`           |
+| nginx     | HTTPS (TLS)      | `8443`    | `443`          |
+| HAProxy   | HTTP (redirect)  | `8090`    | `8080`         |
+| HAProxy   | HTTPS (TLS)      | `8453`    | `8443`         |
+| DataPower | Web UI           | `9090`    | `9090`         |
+| DataPower | SOMA API (SOAP)  | `5550`    | `5550`         |
+| DataPower | REST Mgmt API    | `5554`    | `5554`         |
+| DataPower | Demo TLS service | `8043`    | `8043`         |
 
 ---
 

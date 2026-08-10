@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# reload-nginx.sh — sent after Vault Agent writes a renewed certificate.
-# Sends SIGHUP to the running nginx master process so it reloads without
-# dropping existing connections.
+# reload-nginx.sh — run by Vault Agent exec after each certificate renewal.
+# Sends SIGHUP to the nginx master process inside the running container so it
+# reloads the certificate without dropping existing connections.
 set -euo pipefail
 
-nginx -s reload
+podman exec nginx-vault nginx -s reload
 echo "nginx reloaded at $(date)"
