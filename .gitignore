@@ -10,3 +10,6 @@ pidfile
 
 .vault-token
 .bob/
+.vault-token-datapower
+.vault-token-haproxy
+.vault-token-nginx
