@@ -7,7 +7,7 @@ This repository demonstrates four Vault Agent workflows:
 3. **nginx** — Vault Agent provisions TLS certificates for nginx and reloads the server on each renewal.
 4. **HAProxy** — Vault Agent provisions TLS certificates for HAProxy and reloads the server on each renewal.
 
-Infrastructure (audit device, PKI engine, root CA, intermediate CA, and roles) is managed with Terraform.
+Infrastructure (audit device, PKI engine, root CA, intermediate CA, roles, ACL policies, and token auth backend roles) is managed with Terraform.
 
 ## Prerequisites
 
@@ -48,10 +48,16 @@ The Terraform configuration in `./terraform` provisions:
 - Root PKI secrets engine mounted at `pki`
 - Root CA (`vault.hashicorp.ibm`, TTL 1 year)
 - Intermediate PKI secrets engine mounted at `pki_int` (signed by the root CA)
-- PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h) — issues from intermediate
-- PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h) — issues from intermediate
-- PKI role `nginx` (allowed domain `nginx.hashicorp.ibm`, max TTL 72h) — issues from intermediate
-- PKI role `haproxy` (allowed domain `haproxy.hashicorp.ibm`, max TTL 72h) — issues from intermediate
+- PKI role `demoissuer` (allowed domain `demo.vault.hashicorp.ibm`, max TTL 72h)
+- PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h)
+- PKI role `nginx` (allowed domain `nginx.hashicorp.ibm`, max TTL 72h)
+- PKI role `haproxy` (allowed domain `haproxy.hashicorp.ibm`, max TTL 72h)
+- ACL policy `datapower-pki` — least-privilege access to `pki_int/issue/datapower` (defined in `terraform/policies/datapower.hcl`)
+- ACL policy `nginx-pki` — least-privilege access to `pki_int/issue/nginx` (defined in `terraform/policies/nginx.hcl`)
+- ACL policy `haproxy-pki` — least-privilege access to `pki_int/issue/haproxy` (defined in `terraform/policies/haproxy.hcl`)
+- Token auth backend role `datapower` — restricts minted tokens to `datapower-pki`
+- Token auth backend role `nginx` — restricts minted tokens to `nginx-pki`
+- Token auth backend role `haproxy` — restricts minted tokens to `haproxy-pki`
 
 ```bash
 cd terraform
@@ -61,16 +67,44 @@ terraform apply
 
 After a successful apply, Terraform prints the outputs:
 
-| Output                 | Description                                    |
-| ---------------------- | ---------------------------------------------- |
-| `pki_mount_path`       | Mount path of the root PKI engine              |
-| `pki_int_mount_path`   | Mount path of the intermediate PKI engine      |
-| `root_ca_common_name`  | Common name of the root CA                     |
-| `role_name`            | PKI role name for issuing certs                |
-| `issue_path`           | Vault path for demoissuer certificate issuance |
-| `datapower_issue_path` | Vault path for DataPower certificate issuance  |
-| `nginx_issue_path`     | Vault path for nginx certificate issuance      |
-| `haproxy_issue_path`   | Vault path for HAProxy certificate issuance    |
+| Output                  | Description                                    |
+| ----------------------- | ---------------------------------------------- |
+| `pki_mount_path`        | Mount path of the root PKI engine              |
+| `pki_int_mount_path`    | Mount path of the intermediate PKI engine      |
+| `root_ca_common_name`   | Common name of the root CA                     |
+| `role_name`             | PKI role name for issuing certs (demoissuer)   |
+| `issue_path`            | Vault path for demoissuer certificate issuance |
+| `datapower_issue_path`  | Vault path for DataPower certificate issuance  |
+| `nginx_issue_path`      | Vault path for nginx certificate issuance      |
+| `haproxy_issue_path`    | Vault path for HAProxy certificate issuance    |
+| `datapower_policy_name` | Name of the DataPower ACL policy               |
+| `nginx_policy_name`     | Name of the nginx ACL policy                   |
+| `haproxy_policy_name`   | Name of the HAProxy ACL policy                 |
+
+## 4. Issue per-service tokens
+
+Each Vault Agent authenticates with a scoped token that carries only the ACL policy for its PKI role.
+Run the helper script from the repo root to mint the three tokens and write them to separate files:
+
+```bash
+bash ./issue-tokens.sh
+```
+
+| Token file               | Policy attached   | Consumed by                            |
+| ------------------------ | ----------------- | -------------------------------------- |
+| `.vault-token-datapower` | `datapower-pki`   | `datapower.hcl`, `datapower-init.hcl` |
+| `.vault-token-nginx`     | `nginx-pki`       | `nginx.hcl`                            |
+| `.vault-token-haproxy`   | `haproxy-pki`     | `haproxy.hcl`                          |
+
+Each file is written `chmod 600`. The script accepts optional environment variables:
+
+| Variable      | Default                   | Description                          |
+| ------------- | ------------------------- | ------------------------------------ |
+| `VAULT_ADDR`  | `http://127.0.0.1:8200`   | Vault server address                 |
+| `VAULT_TOKEN` | `root`                    | Token with permission to mint tokens |
+| `TOKEN_TTL`   | `1h`                      | Initial TTL for each issued token    |
+
+Re-run `issue-tokens.sh` any time a token expires or needs rotating.
 
 ---
 
@@ -156,7 +190,7 @@ vault agent -config=./datapower.hcl #-log-level debug
 
 ### Authentication options
 
-[`datapower.hcl`](datapower.hcl) uses `token_file` by default, reading from `.vault-token`. Commented examples for Kubernetes and AWS auth are included in the file.
+[`datapower.hcl`](datapower.hcl) uses `token_file` by default, reading from `.vault-token-datapower` (written by `issue-tokens.sh`). Commented examples for Kubernetes and AWS auth are included in the file.
 
 #### Token file (default)
 
@@ -165,7 +199,7 @@ method {
   type = "token_file"
 
   config = {
-    token_file_path = ".vault-token"
+    token_file_path = ".vault-token-datapower"
   }
 }
 ```
@@ -237,7 +271,7 @@ curl -k -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
 
 **Vault Agent exits immediately** — If `-exit-after-auth` was passed, this is expected for the initial one-shot render.
 
-**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, `.vault-token` exists at the repo root, and the templates reference valid PKI paths.
+**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, the relevant `.vault-token-<service>` file exists (run `bash ./issue-tokens.sh`), and the templates reference valid PKI paths.
 
 **Upload to DataPower fails** — Verify DataPower is running, REST Management API is reachable on `https://localhost:5554`, credentials match the container, and the expected cert files exist in `certs/`.
 
@@ -314,8 +348,7 @@ Vault Agent provisions a TLS certificate for HAProxy and reloads the server when
 
 ```text
 ./
-├── haproxy-init.hcl                # one-shot agent config: renders initial cert and exits
-├── haproxy.hcl                     # continuous agent config: renews cert and reloads HAProxy
+├── haproxy.hcl                     # single agent config: initial render and continuous renewal
 ├── templates/
 │   └── haproxy-cert.vtmpl          # Vault Agent template — writes cert + chain + private key
 ├── haproxy/
@@ -327,13 +360,14 @@ Vault Agent provisions a TLS certificate for HAProxy and reloads the server when
 
 ### Step 1 — Generate the initial certificate
 
-Run Vault Agent once from the repository root to populate the cert files before starting HAProxy:
+Run `haproxy.hcl` with `-exit-after-auth` to populate the cert files before starting HAProxy.
+The `exec` block does not fire when the agent exits after auth, so `reload-haproxy.sh` is not called on this run.
 
 ```bash
-vault agent -config=./haproxy-init.hcl -exit-after-auth
+vault agent -config=./haproxy.hcl -exit-after-auth
 ```
 
-[`haproxy-init.hcl`](haproxy-init.hcl) renders [`templates/haproxy-cert.vtmpl`](templates/haproxy-cert.vtmpl), writing:
+[`haproxy.hcl`](haproxy.hcl) renders [`templates/haproxy-cert.vtmpl`](templates/haproxy-cert.vtmpl), writing:
 
 - `certs/haproxy-cert.pem` — certificate + CA chain (template destination)
 - `certs/haproxy-privkey.pem` — private key (written via `writeToFile`)
@@ -362,15 +396,14 @@ vault agent -config=./haproxy.hcl
 
 ### How it works
 
-| File                              | Purpose                                                                      |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| `haproxy-init.hcl`                | One-shot: renders initial cert files before HAProxy starts                   |
-| `haproxy.hcl`                     | Continuous: renews cert and triggers reload on each renewal                  |
-| `haproxy/start-haproxy.sh`        | Starts `haproxy:alpine` container via Podman, mounts config + certs          |
-| `haproxy/success.html`            | Static HTML page served at `/`                                               |
-| `templates/haproxy-cert.vtmpl`    | Requests cert from `pki_int/issue/haproxy`, writes key + cert+chain          |
-| `haproxy/reload-haproxy.sh`       | Assembles bundle, sends `podman kill --signal=HUP haproxy-vault`             |
-| `haproxy/haproxy.cfg`             | HAProxy config; cert path is `/certs/haproxy-bundle.pem` (container path)    |
+| File                           | Purpose                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `haproxy.hcl`                  | Initial render (`-exit-after-auth`) and continuous renewal + reload       |
+| `haproxy/start-haproxy.sh`     | Starts `haproxy:alpine` container via Podman, mounts config + certs       |
+| `haproxy/success.html`         | Static HTML page served at `/`                                            |
+| `templates/haproxy-cert.vtmpl` | Requests cert from `pki_int/issue/haproxy`, writes key + cert+chain       |
+| `haproxy/reload-haproxy.sh`    | Assembles bundle, sends `podman kill --signal=HUP haproxy-vault`          |
+| `haproxy/haproxy.cfg`          | HAProxy config; cert path is `/certs/haproxy-bundle.pem` (container path) |
 
 ### Verify the certificate
 
@@ -403,3 +436,6 @@ All container-based flows use distinct host ports so they can run simultaneously
 cd terraform
 terraform destroy
 ```
+
+The destroy removes all Vault resources managed by Terraform (PKI engines, roles, policies, token auth backend roles).
+The token files (`.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`) are not deleted automatically — remove them manually or via `cleanup.sh`.

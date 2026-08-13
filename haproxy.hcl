@@ -9,7 +9,7 @@ auto_auth {
     type = "token_file"
 
     config = {
-      token_file_path = ".vault-token"
+      token_file_path = ".vault-token-haproxy"
     }
   }
 }
@@ -21,8 +21,9 @@ auto_auth {
 #   2. Validates the HAProxy config
 #   3. Gracefully reloads HAProxy with the new bundle
 #
-# Run haproxy-init.hcl with -exit-after-auth first to populate the initial
-# certificate files before starting HAProxy.
+# For the initial cert render before starting HAProxy, run with -exit-after-auth:
+#   vault agent -config=./haproxy.hcl -exit-after-auth
+# The exec block does not fire when the agent exits after auth.
 template {
   source      = "templates/haproxy-cert.vtmpl"
   destination = "certs/haproxy-cert.pem"
