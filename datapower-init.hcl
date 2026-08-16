@@ -1,4 +1,4 @@
-pid_file = "./pidfile"
+pid_file = "./pidfile-datapower-init"
 
 vault {
   address = "http://127.0.0.1:8200"

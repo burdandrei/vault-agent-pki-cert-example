@@ -1,6 +1,6 @@
 # Project Coding Rules (Non-Obvious Only)
 
-- All Vault Agent HCL configs share a `pid_file = "./pidfile"` at the repo root — never add a new config that writes a pidfile to a different path or parallel runs will conflict.
+- Each Vault Agent HCL config writes its own pidfile at the repo root: `echo.hcl` → `./pidfile-echo`, `nginx.hcl` → `./pidfile-nginx`, `haproxy.hcl` → `./pidfile-haproxy`, `datapower-init.hcl` → `./pidfile-datapower-init`, `datapower.hcl` → `./pidfile-datapower`. New configs must follow the same `./pidfile-<name>` pattern. To stop a specific agent use `kill $(cat ./pidfile-<name>)`; to stop all agents at once use `pkill -f 'vault agent'`.
 - `.vtmpl` template destination files (e.g., `certs/destination.out`) are written as a raw concatenation of cert + CA + key. The real usable per-type files are produced only by `writeToFile` side effects inside the template. Don't confuse the destination file with an actual usable cert file.
 - `writeToFile` append mode requires the literal string `"append"` as a **5th positional argument**, not a named option: `{{ .Cert | writeToFile "path" "" "" "0644" "append" }}`.
 - Shell scripts that call `datapower/upload-certs-to-datapower.sh` must be invoked from the **repo root** — the script hard-codes relative paths like `datapower/certs/demo-sscert.pem`.

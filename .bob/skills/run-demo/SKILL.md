@@ -1,6 +1,6 @@
 ---
 name: run-demo
-description: Activate when the user says "run the demo", "start the demo", "walk me through the demo", or "/run-demo" — interactively executes the Vault Agent PKI certificate demo step by step, with flow selection (Basic / nginx / HAProxy), confirmations before each phase, and optional teardown at the end.
+description: Activate when the user says "run the demo", "start the demo", "walk me through the demo", or "/run-demo" — interactively executes the Vault Agent PKI certificate demo step by step, with flow selection (Basic / nginx / HAProxy / DataPower), confirmations before each phase, and optional teardown at the end.
 ---
 
 # Vault Agent PKI Demo — Interactive Runner
@@ -21,20 +21,21 @@ You are guiding the user through the Vault Agent PKI demo interactively.
 
 **Explain:** "Let me verify the required tools are installed before we start."
 
-Run these three checks with a single `execute_command`:
+Run these checks with a single `execute_command`:
 
 ```bash
 echo "=== Prerequisites Check ===" \
   && echo -n "vault:     " && vault version \
   && echo -n "terraform: " && terraform version -no-color 2>&1 | head -1 \
-  && echo -n "podman:    " && podman --version
+  && echo -n "podman:    " && podman --version \
+  && echo -n "curl:      " && curl --version | head -1
 ```
 
-If any tool is missing (command not found), stop and tell the user which tool to install and link them to the README prerequisites section. Only continue when all three are present.
+If any tool is missing (command not found), stop and tell the user which tool to install and link them to the README prerequisites section. Note: `curl` is only strictly required for the DataPower flow (used by `upload-certs-to-datapower.sh`), but flag it now so there are no surprises later. Only continue when vault, terraform, and podman are present.
 
 Use `ask_followup_question`:
-- **Question:** "Prerequisites look good — ready to start Vault?"
-- **Suggestion A:** "Yes — let's start Vault"
+- **Question:** "Prerequisites look good — ready to begin?"
+- **Suggestion A:** "Yes — let's go"
 - **Suggestion B:** "No, stop here"
 - **Suggestion C:** "Re-run the prerequisites check"
 
@@ -42,13 +43,34 @@ Use `ask_followup_question`:
 
 ## Phase 1 — Start Vault Dev Server
 
-**Explain:** "Vault must be running in dev mode for the demo. Dev mode starts a fully in-memory server with a pre-set root token (`root`) — perfect for local testing. The server process is long-running and needs its own terminal."
+**Explain:** "Let me check whether a Vault dev server is already reachable before we decide what to do."
 
-Ask the user with `ask_followup_question`:
+First, silently probe Vault with `execute_command`:
+```bash
+VAULT_ADDR='http://127.0.0.1:8200' VAULT_TOKEN='root' vault status -format=json 2>/dev/null \
+  && echo "VAULT_RUNNING=yes" || echo "VAULT_RUNNING=no"
+```
+
+**If the output contains `VAULT_RUNNING=yes`:**
+
+Confirm to the user: "Found a running Vault dev server at `http://127.0.0.1:8200` — no need to start a new one."
+
+Use `ask_followup_question`:
+- **Question:** "Vault is already running — continue with this server?"
+- **Suggestion A:** "Yes — use the existing server"
+- **Suggestion B:** "No — start a fresh dev server instead"
+- **Suggestion C:** "Stop here"
+
+If the user picks B, proceed with the "start a fresh server" path below (kill any existing process first: `pkill -f 'vault server' 2>/dev/null; sleep 1`).
+
+**If the output contains `VAULT_RUNNING=no`:**
+
+**Explain:** "No Vault server found at `http://127.0.0.1:8200`. Dev mode starts a fully in-memory server with a pre-set root token (`root`) — perfect for local testing. The server process is long-running and needs its own terminal."
+
+Use `ask_followup_question`:
 - **Question:** "How would you like to start the Vault dev server?"
-- **Suggestion A:** "Start it for me in the background (agent runs `vault server -dev &`)"
-- **Suggestion B:** "I'll start it myself — please give me the command to paste in a new terminal"
-- **Suggestion C:** "I already have a Vault dev server running — skip ahead and verify it"
+- **Suggestion A:** "Start it for me in the background"
+- **Suggestion B:** "I'll start it myself — give me the command to paste in a new terminal"
 
 **If the user picks A (agent starts it):**
 
@@ -59,63 +81,50 @@ echo "Vault dev PID: $!"
 sleep 2
 ```
 
-Then verify it is reachable:
-```bash
-export VAULT_ADDR='http://127.0.0.1:8200' && export VAULT_TOKEN='root' && vault status
-```
-
 **If the user picks B (user starts it themselves):**
 
-Print this block for them to copy:
+Print this for them to copy into a new terminal:
 ```
 vault server -dev -dev-root-token-id=root -log-level=DEBUG
 ```
-Tell them to open a new terminal, paste the command, and leave it running.
 Then use `ask_followup_question`:
 - **Question:** "Is Vault running in the new terminal?"
-- **Suggestion A:** "Vault is running — continue"
+- **Suggestion A:** "Yes — it's running"
 - **Suggestion B:** "Not yet, give me a moment"
 - **Suggestion C:** "It failed to start — show me what to check"
-Once confirmed, verify with `execute_command`:
+
+---
+
+**After any of the above paths**, verify Vault is reachable with `execute_command`:
 ```bash
 export VAULT_ADDR='http://127.0.0.1:8200' && export VAULT_TOKEN='root' && vault status
 ```
 
-**If the user picks C (Vault already running):**
+If `vault status` fails, tell the user Vault is not reachable and ask them to check whether the server is running at the correct address before retrying.
 
-Skip starting the server. Go straight to verifying reachability:
-```bash
-export VAULT_ADDR='http://127.0.0.1:8200' && export VAULT_TOKEN='root' && vault status
-```
-
-If `vault status` fails, tell the user Vault does not appear to be reachable and ask them to check whether the dev server is actually running (correct address, correct token) before retrying.
-
-If `vault status` succeeds, confirm: "Found a running Vault at `http://127.0.0.1:8200` — proceeding with the existing server."
-
-If `vault status` fails, tell the user Vault does not appear to be reachable and ask them to check whether the dev server is actually running before retrying.
+If `vault status` succeeds, confirm: "Vault is up at `http://127.0.0.1:8200`."
 
 Use `ask_followup_question`:
 - **Question:** "Vault is up — ready to set environment variables?"
-- **Suggestion A:** "Yes — set environment variables"
+- **Suggestion A:** "Yes — continue"
 - **Suggestion B:** "No, stop here"
 - **Suggestion C:** "Re-run vault status to double-check"
 
 ---
 
-## Phase 2 — Export Environment Variables & Copy Token
+## Phase 2 — Export Environment Variables
 
-**Explain:** "We need four environment variables so every subsequent `vault` and `terraform` command knows where Vault lives and how to authenticate. We also copy the dev-mode token file into the repo root so Vault Agent's `echo.hcl` can find it."
+**Explain:** "We need three environment variables so every subsequent `vault` and `terraform` command knows where Vault lives and how to authenticate."
 
 Run with `execute_command`:
 ```bash
 export VAULT_ADDR='http://127.0.0.1:8200'
 export VAULT_TOKEN='root'
 export VAULT_SKIP_VERIFY='true'
-cp ~/.vault-token .vault-token
-echo "Token copied. VAULT_ADDR=$VAULT_ADDR  VAULT_TOKEN=$VAULT_TOKEN"
+echo "VAULT_ADDR=$VAULT_ADDR  VAULT_TOKEN=$VAULT_TOKEN"
 ```
 
-Note: `export` statements set the environment for this session. The `.vault-token` file is read by `echo.hcl` at agent startup.
+Note: `export` statements set the environment for this session only.
 
 Use `ask_followup_question`:
 - **Question:** "Environment ready — proceed to Terraform?"
@@ -147,7 +156,7 @@ Use `ask_followup_question`:
 
 ## Phase 4 — Issue Per-Service Tokens
 
-**Explain:** "Each Vault Agent authenticates with a least-privilege token that only has access to the PKI role it needs. `issue-tokens.sh` mints three tokens and writes them to `.vault-token-nginx`, `.vault-token-haproxy`, and `.vault-token-datapower`. (We only need nginx and haproxy for the flows we're running, but the script issues all three.)"
+**Explain:** "Each Vault Agent authenticates with a least-privilege token that only has access to the PKI role it needs. `issue-tokens.sh` mints three tokens and writes them to `.vault-token-nginx`, `.vault-token-haproxy`, and `.vault-token-datapower` — one per service, and all three may be needed depending on which flows you select."
 
 Run with `execute_command`:
 ```bash
@@ -156,10 +165,14 @@ bash ./issue-tokens.sh
 
 Verify the token files were created:
 ```bash
-ls -lh .vault-token-nginx .vault-token-haproxy
+ls -lh .vault-token-nginx .vault-token-haproxy .vault-token-datapower
 ```
 
-Ask: "Tokens issued — which flows do you want to run?"
+Use `ask_followup_question`:
+- **Question:** "Tokens issued — which flows do you want to run?"
+- **Suggestion A:** "Continue to flow selection"
+- **Suggestion B:** "No, stop here"
+- **Suggestion C:** "Re-run ls to verify the token files"
 
 ---
 
@@ -171,6 +184,7 @@ Use `ask_followup_question` with `allow_multiple: true`:
 - **Suggestion A:** "Basic — Vault Agent issues a PKI cert and writes it to certs/"
 - **Suggestion B:** "nginx — Vault Agent provisions a TLS cert and auto-reloads nginx on renewal"
 - **Suggestion C:** "HAProxy — Vault Agent provisions a TLS cert and sends SIGHUP to HAProxy on renewal"
+- **Suggestion D:** "DataPower — Vault Agent provisions TLS certs, starts the IBM DataPower container, and auto-uploads renewed certs via the REST Management API"
 
 Record which flows were selected and run only those phases below.
 
@@ -178,10 +192,11 @@ Record which flows were selected and run only those phases below.
 
 ## Phase 6A — Basic Flow (run only if selected)
 
-**Explain:** "The Basic flow runs `vault agent` with `-exit-after-auth`, which means the agent authenticates once, renders the certificate template to `certs/cert.pem` (and a combined `certs/destination.out`), then exits. The `exec` block in `echo.hcl` also fires `openssl x509 -noout -dates` on the cert so we see its validity window immediately."
+**Explain:** "The Basic flow uses `echo.hcl`, which authenticates via a token file at `.vault-token` in the repo root. Vault dev mode writes the root token to `~/.vault-token` — we copy it here so the agent can find it. Then we run the agent with `-exit-after-auth`: it authenticates once, renders the certificate template to `certs/cert.pem` (and a combined `certs/destination.out`), then exits. The `exec` block in `echo.hcl` also fires `openssl x509 -noout -dates` on the cert so we see its validity window immediately."
 
 Run with `execute_command`:
 ```bash
+cp ~/.vault-token .vault-token
 vault agent -config=./echo.hcl -exit-after-auth
 ```
 
@@ -258,9 +273,9 @@ echo "Vault Agent nginx PID: $!"
 sleep 3 && tail -5 /tmp/vault-agent-nginx.log
 ```
 
-After confirmation (A or C), verify the cert one more time:
+After confirmation (A or C), verify the cert by reading it directly from the live TLS handshake on `localhost:8443`:
 ```bash
-openssl x509 -in certs/nginx-cert.pem -noout -subject -dates
+echo "" | openssl s_client -connect localhost:8443 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
 ```
 
 Use `ask_followup_question`:
@@ -268,6 +283,27 @@ Use `ask_followup_question`:
 - **Suggestion A:** "Continue to the next selected flow (or teardown)"
 - **Suggestion B:** "Stop here"
 - **Suggestion C:** "Verify the cert and TLS endpoint one more time"
+- **Suggestion D:** "Wait for the cert to rotate and verify the new one live"
+
+**If the user picks C:** re-run:
+```bash
+echo "" | openssl s_client -connect localhost:8443 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+
+**If the user picks D:** capture the current fingerprint from the live TLS handshake on `localhost:8443`, then poll until it changes:
+```bash
+old=$(echo "" | openssl s_client -connect localhost:8443 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+echo "Current fingerprint: $old"
+echo "Waiting for rotation (checking every 10s, up to 3 min)..."
+for i in $(seq 1 18); do
+  sleep 10
+  new=$(echo "" | openssl s_client -connect localhost:8443 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+  echo "[$i/18] $new"
+  [ "$new" != "$old" ] && echo "Cert rotated!" && break
+done
+echo "" | openssl s_client -connect localhost:8443 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+Point out the new `notBefore` and changed fingerprint as live proof that Vault Agent renewed the cert and nginx picked it up with zero downtime.
 
 ---
 
@@ -339,16 +375,179 @@ echo "Vault Agent HAProxy PID: $!"
 sleep 3 && tail -5 /tmp/vault-agent-haproxy.log
 ```
 
-After confirmation (A or C):
+After confirmation (A or C), verify the cert by reading it directly from the live TLS handshake on `localhost:8453`:
 ```bash
-openssl x509 -in certs/haproxy-cert.pem -noout -subject -dates
+echo "" | openssl s_client -connect localhost:8453 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
 ```
 
 Use `ask_followup_question`:
 - **Question:** "HAProxy flow complete — what would you like to do next?"
-- **Suggestion A:** "Proceed to teardown"
+- **Suggestion A:** "Continue to the next selected flow (or teardown)"
 - **Suggestion B:** "Stop here, leave everything running"
 - **Suggestion C:** "Verify the cert and TLS endpoint one more time"
+- **Suggestion D:** "Wait for the cert to rotate and verify the new one live"
+
+**If the user picks C:** re-run:
+```bash
+echo "" | openssl s_client -connect localhost:8453 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+
+**If the user picks D:** capture the current fingerprint from the live TLS handshake on `localhost:8453`, then poll until it changes:
+```bash
+old=$(echo "" | openssl s_client -connect localhost:8453 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+echo "Current fingerprint: $old"
+echo "Waiting for rotation (checking every 10s, up to 3 min)..."
+for i in $(seq 1 18); do
+  sleep 10
+  new=$(echo "" | openssl s_client -connect localhost:8453 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+  echo "[$i/18] $new"
+  [ "$new" != "$old" ] && echo "Cert rotated!" && break
+done
+echo "" | openssl s_client -connect localhost:8453 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+Point out the new `notBefore` and changed fingerprint as live proof that Vault Agent renewed the cert and HAProxy picked it up gracefully.
+
+---
+
+## Phase 6D — DataPower Flow (run only if selected)
+
+### Step 1 — Issue Initial Certificates
+
+**Explain:** "`datapower-init.hcl` is a one-shot config that renders three certificate templates (`dp-webgui.vtmpl`, `dp-ui.vtmpl`, `dp-demo.vtmpl`) into `datapower/certs/` and exits. We need these files on disk before the container starts, otherwise DataPower's TLS contexts have nothing to load."
+
+Run with `execute_command`:
+```bash
+vault agent -config=./datapower-init.hcl -exit-after-auth
+```
+
+Verify the cert files were written:
+```bash
+ls -lh datapower/certs/
+openssl x509 -in datapower/certs/demo-sscert.pem -noout -subject -dates
+```
+
+Use `ask_followup_question`:
+- **Question:** "Initial DataPower certs are on disk — ready to start the container?"
+- **Suggestion A:** "Yes — start DataPower"
+- **Suggestion B:** "No, stop here"
+- **Suggestion C:** "Re-run openssl to inspect a cert"
+
+### Step 2 — Start the DataPower Container
+
+**Explain:** "`start-datapower.sh` launches `icr.io/cpopen/datapower/datapower-limited:11.0.0.1` via Podman with `--privileged`, mounts `datapower/certs/` into `cert:///` inside the container, and exposes four ports. **This is a long-running, interactive process** — it must run in a separate terminal, and it must be started from the `datapower/` directory (the script hard-codes relative paths)."
+
+Print this for the user to copy into a new terminal:
+```
+cd datapower && bash ./start-datapower.sh
+```
+
+Tell them: "Open a new terminal, `cd` into the `datapower/` subdirectory, and run that command. DataPower takes 30–60 seconds to fully boot."
+
+| Endpoint | URL |
+|---|---|
+| Web UI | `https://localhost:9090` |
+| SOMA API (SOAP) | `https://localhost:5550` |
+| REST Management API | `https://localhost:5554` |
+| Demo TLS service | `https://localhost:8043` |
+
+Default credentials: `admin` / `admin`.
+
+Use `ask_followup_question`:
+- **Question:** "Is the DataPower container starting in the other terminal?"
+- **Suggestion A:** "Yes — it's booting, I'll wait for it"
+- **Suggestion B:** "Not yet, give me a moment"
+- **Suggestion C:** "It failed to start — help me diagnose"
+
+**If the user picks C:** run `podman logs my-datapower 2>&1 | tail -30` and explain the output.
+
+### Step 3 — Wait for DataPower to Be Ready
+
+**Explain:** "DataPower's REST Management API becomes reachable once the runtime is initialised. We poll it until it responds."
+
+Run with `execute_command` (retry up to 12 times, 5-second gap = 60 s max):
+```bash
+for i in $(seq 1 12); do
+  echo "Attempt $i/12..."
+  code=$(curl -sk -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/ \
+    -o /dev/null -w "%{http_code}")
+  echo "HTTP $code"
+  [ "$code" = "200" ] && echo "DataPower REST API is up!" && break
+  sleep 5
+done
+```
+
+If the loop exhausts all 12 attempts without a 200, tell the user DataPower is still booting or unreachable and ask them to check the container terminal for errors before retrying.
+
+Use `ask_followup_question`:
+- **Question:** "DataPower is up — ready to start the continuous renewal agent?"
+- **Suggestion A:** "Yes — start the renewal agent"
+- **Suggestion B:** "No, stop here"
+- **Suggestion C:** "Verify the cert filestore via curl first"
+
+**If the user picks C:** run:
+```bash
+curl -sk -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
+```
+Show the output and explain that the cert files listed there are what DataPower's TLS contexts are currently using.
+
+### Step 4 — Continuous Renewal Agent
+
+**Explain:** "`vault agent -config=./datapower.hcl` runs indefinitely. It watches the TTL of the demo cert rendered by `templates/dp-demo-1m.vtmpl` and re-issues it before expiry. After each renewal it calls `datapower/upload-certs-to-datapower.sh`, which: (1) uploads the new `demo-sscert.pem` and `demo-privkey.pem` to the DataPower cert filestore via PUT, (2) reloads the `CryptoCertificate/demo` and `CryptoKey/demo` config objects so the running TLS context picks up the new material — uploading the file alone is not enough. This is a long-running process and must run in a separate terminal."
+
+**Important:** `upload-certs-to-datapower.sh` uses relative paths (`datapower/certs/demo-sscert.pem`) so the agent **must be run from the repo root** — never from the `datapower/` subdirectory.
+
+Print this command for the user to copy:
+```
+vault agent -config=./datapower.hcl
+```
+
+Use `ask_followup_question`:
+- **Question:** "Is Vault Agent for DataPower running in a separate terminal?"
+- **Suggestion A:** "Yes — it's running, continue"
+- **Suggestion B:** "Not yet, give me a moment"
+- **Suggestion C:** "Run it for me in the background instead"
+
+**If the user picks C (run in background):** run with `execute_command`:
+```bash
+vault agent -config=./datapower.hcl > /tmp/vault-agent-datapower.log 2>&1 &
+echo "Vault Agent DataPower PID: $!"
+sleep 5 && tail -10 /tmp/vault-agent-datapower.log
+```
+
+After confirmation (A or C), verify the cert DataPower is actively serving by reading it directly from the TLS handshake on the demo service port (`8043`):
+```bash
+echo "" | openssl s_client -connect localhost:8043 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+
+Explain the output:
+- **Subject** confirms it's the `demo.datapower.hashicorp.ibm` leaf cert issued by Vault.
+- **Issuer** should be `CN=vault.hashicorp.ibm Intermediate CA` — the `pki_int` engine.
+- **Dates** reveal the short TTL (`dp-demo-1m.vtmpl` uses ~90 seconds) — watch the `notBefore` advance on successive runs to confirm the agent is rotating the cert automatically.
+- **Fingerprint** can be compared across renewals to confirm a new cert was issued.
+
+Use `ask_followup_question`:
+- **Question:** "DataPower flow complete — what would you like to do next?"
+- **Suggestion A:** "Continue to the next selected flow (or teardown)"
+- **Suggestion B:** "Stop here, leave everything running"
+- **Suggestion C:** "Re-run the TLS handshake check to see if the cert has already rotated"
+- **Suggestion D:** "Wait for the next rotation and verify it live"
+
+**If the user picks C:** re-run the same `openssl s_client` command and compare the `notBefore` and fingerprint against the previous output to confirm rotation already happened.
+
+**If the user picks D:** capture the current fingerprint from the live TLS handshake on `localhost:8043`, then poll until it changes (~90s TTL so this is fast):
+```bash
+old=$(echo "" | openssl s_client -connect localhost:8043 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+echo "Current fingerprint: $old"
+echo "Waiting for rotation (checking every 10s, up to 3 min — ~90s TTL so this should be quick)..."
+for i in $(seq 1 18); do
+  sleep 10
+  new=$(echo "" | openssl s_client -connect localhost:8043 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+  echo "[$i/18] $new"
+  [ "$new" != "$old" ] && echo "Cert rotated on DataPower!" && break
+done
+echo "" | openssl s_client -connect localhost:8043 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+Point out the new `notBefore` and changed fingerprint as live proof that Vault Agent rotated the cert and DataPower picked it up automatically via the REST Management API reload.
 
 ---
 
@@ -371,12 +570,15 @@ Use `ask_followup_question`:
 
 **If the user picks C:** print:
 ```
-# Kill background agents (if started in background):
-kill $(cat ./pidfile 2>/dev/null) 2>/dev/null
+# Kill individual agents by their pidfile (or use pkill to stop all at once):
+kill $(cat ./pidfile-nginx 2>/dev/null) 2>/dev/null
+kill $(cat ./pidfile-haproxy 2>/dev/null) 2>/dev/null
+kill $(cat ./pidfile-datapower 2>/dev/null) 2>/dev/null
+# — or, to stop everything in one shot:
 pkill -f 'vault agent' 2>/dev/null
 
-# Stop containers:
-podman stop nginx-vault haproxy-vault 2>/dev/null
+# Stop containers (DataPower may take ~15 s to stop gracefully):
+podman stop nginx-vault haproxy-vault my-datapower 2>/dev/null
 ```
 Then re-ask the confirmation question.
 

@@ -1,4 +1,4 @@
-{{- with pkiCert "pki_int/issue/nginx" "common_name=nginx.hashicorp.ibm" "ttl=1h" -}}
+{{- with pkiCert "pki_int/issue/nginx" "common_name=nginx.hashicorp.ibm" "ttl=2m" -}}
 {{- .Key | writeToFile "certs/nginx-privkey.pem" "" "" "0600" -}}
 {{ .Cert }}{{ .CA }}
 {{- end}}
