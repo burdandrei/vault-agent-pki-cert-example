@@ -58,6 +58,7 @@ The Terraform configuration in `./terraform` provisions:
 - Token auth backend role `datapower` — restricts minted tokens to `datapower-pki`
 - Token auth backend role `nginx` — restricts minted tokens to `nginx-pki`
 - Token auth backend role `haproxy` — restricts minted tokens to `haproxy-pki`
+- Service token for each role, written to `.vault-token-datapower`, `.vault-token-nginx`, and `.vault-token-haproxy` at the repo root (`chmod 600`)
 
 ```bash
 cd terraform
@@ -67,44 +68,29 @@ terraform apply
 
 After a successful apply, Terraform prints the outputs:
 
-| Output                  | Description                                    |
-| ----------------------- | ---------------------------------------------- |
-| `pki_mount_path`        | Mount path of the root PKI engine              |
-| `pki_int_mount_path`    | Mount path of the intermediate PKI engine      |
-| `root_ca_common_name`   | Common name of the root CA                     |
-| `role_name`             | PKI role name for issuing certs (demoissuer)   |
-| `issue_path`            | Vault path for demoissuer certificate issuance |
-| `datapower_issue_path`  | Vault path for DataPower certificate issuance  |
-| `nginx_issue_path`      | Vault path for nginx certificate issuance      |
-| `haproxy_issue_path`    | Vault path for HAProxy certificate issuance    |
-| `datapower_policy_name` | Name of the DataPower ACL policy               |
-| `nginx_policy_name`     | Name of the nginx ACL policy                   |
-| `haproxy_policy_name`   | Name of the HAProxy ACL policy                 |
+| Output                        | Description                                              |
+| ----------------------------- | -------------------------------------------------------- |
+| `pki_mount_path`              | Mount path of the root PKI engine                        |
+| `pki_int_mount_path`          | Mount path of the intermediate PKI engine                |
+| `root_ca_common_name`         | Common name of the root CA                               |
+| `role_name`                   | PKI role name for issuing certs (demoissuer)             |
+| `issue_path`                  | Vault path for demoissuer certificate issuance           |
+| `datapower_issue_path`        | Vault path for DataPower certificate issuance            |
+| `nginx_issue_path`            | Vault path for nginx certificate issuance                |
+| `haproxy_issue_path`          | Vault path for HAProxy certificate issuance              |
+| `vault_token_datapower_file`  | Path of the token file written for the DataPower agent   |
+| `vault_token_nginx_file`      | Path of the token file written for the nginx agent       |
+| `vault_token_haproxy_file`    | Path of the token file written for the HAProxy agent     |
 
-## 4. Issue per-service tokens
+`terraform apply` also mints one scoped service token per agent role and writes it to the repo root:
 
-Each Vault Agent authenticates with a scoped token that carries only the ACL policy for its PKI role.
-Run the helper script from the repo root to mint the three tokens and write them to separate files:
+| Token file               | Policy attached | Consumed by                            |
+| ------------------------ | --------------- | -------------------------------------- |
+| `.vault-token-datapower` | `datapower-pki` | `datapower.hcl`, `datapower-init.hcl` |
+| `.vault-token-nginx`     | `nginx-pki`     | `nginx.hcl`                            |
+| `.vault-token-haproxy`   | `haproxy-pki`   | `haproxy.hcl`                          |
 
-```bash
-bash ./issue-tokens.sh
-```
-
-| Token file               | Policy attached   | Consumed by                            |
-| ------------------------ | ----------------- | -------------------------------------- |
-| `.vault-token-datapower` | `datapower-pki`   | `datapower.hcl`, `datapower-init.hcl` |
-| `.vault-token-nginx`     | `nginx-pki`       | `nginx.hcl`                            |
-| `.vault-token-haproxy`   | `haproxy-pki`     | `haproxy.hcl`                          |
-
-Each file is written `chmod 600`. The script accepts optional environment variables:
-
-| Variable      | Default                   | Description                          |
-| ------------- | ------------------------- | ------------------------------------ |
-| `VAULT_ADDR`  | `http://127.0.0.1:8200`   | Vault server address                 |
-| `VAULT_TOKEN` | `root`                    | Token with permission to mint tokens |
-| `TOKEN_TTL`   | `1h`                      | Initial TTL for each issued token    |
-
-Re-run `issue-tokens.sh` any time a token expires or needs rotating.
+Each file is written with `chmod 600`. To rotate a token, run `terraform apply` again — Terraform will replace the `vault_token` resource and overwrite the file.
 
 ---
 
@@ -190,7 +176,7 @@ vault agent -config=./datapower.hcl #-log-level debug
 
 ### Authentication options
 
-[`datapower.hcl`](datapower.hcl) uses `token_file` by default, reading from `.vault-token-datapower` (written by `issue-tokens.sh`). Commented examples for Kubernetes and AWS auth are included in the file.
+[`datapower.hcl`](datapower.hcl) uses `token_file` by default, reading from `.vault-token-datapower` (written by `terraform apply`). Commented examples for Kubernetes and AWS auth are included in the file.
 
 #### Token file (default)
 
@@ -271,7 +257,7 @@ curl -k -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
 
 **Vault Agent exits immediately** — If `-exit-after-auth` was passed, this is expected for the initial one-shot render.
 
-**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, the relevant `.vault-token-<service>` file exists (run `bash ./issue-tokens.sh`), and the templates reference valid PKI paths.
+**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, the relevant `.vault-token-<service>` file exists (run `terraform apply` from `terraform/`), and the templates reference valid PKI paths.
 
 **Upload to DataPower fails** — Verify DataPower is running, REST Management API is reachable on `https://localhost:5554`, credentials match the container, and the expected cert files exist in `certs/`.
 
@@ -437,5 +423,5 @@ cd terraform
 terraform destroy
 ```
 
-The destroy removes all Vault resources managed by Terraform (PKI engines, roles, policies, token auth backend roles).
-The token files (`.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`) are not deleted automatically — remove them manually or via `cleanup.sh`.
+The destroy removes all Vault resources managed by Terraform (PKI engines, roles, policies, token auth backend roles, and the minted service tokens).
+The token files (`.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`) are also removed by Terraform because they are managed as `local_sensitive_file` resources. Any remaining generated cert files can be removed with `bash ./cleanup.sh`.

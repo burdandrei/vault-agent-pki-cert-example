@@ -37,3 +37,18 @@ output "haproxy_issue_path" {
   description = "Full Vault path for issuing HAProxy certificates."
   value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.haproxy.name}"
 }
+
+output "vault_token_datapower_file" {
+  description = "Absolute path of the token file written for the DataPower Vault Agent."
+  value       = local_sensitive_file.vault_token_datapower.filename
+}
+
+output "vault_token_nginx_file" {
+  description = "Absolute path of the token file written for the nginx Vault Agent."
+  value       = local_sensitive_file.vault_token_nginx.filename
+}
+
+output "vault_token_haproxy_file" {
+  description = "Absolute path of the token file written for the HAProxy Vault Agent."
+  value       = local_sensitive_file.vault_token_haproxy.filename
+}
