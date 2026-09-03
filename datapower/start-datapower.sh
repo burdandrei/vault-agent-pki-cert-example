@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 SOURCE_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DATAPOWER_VERSION="11.0.0.1"
 cd $SOURCE_PATH
 
 
@@ -18,7 +19,7 @@ podman run --privileged --user root --platform linux/amd64 \
   -v ${PWD}/config:/opt/ibm/datapower/drouter/config \
   -v ${PWD}/local:/opt/ibm/datapower/drouter/local \
   -v ${PWD}/certs:/opt/ibm/datapower/root/secure/usrcerts \
-  icr.io/cpopen/datapower/datapower-limited:11.0.0.1
+  icr.io/cpopen/datapower/datapower-limited:${DATAPOWER_VERSION}
 
 echo "Web UI: https://localhost:9090"
 echo "SOMA API (SOAP)): https://localhost:5550"
