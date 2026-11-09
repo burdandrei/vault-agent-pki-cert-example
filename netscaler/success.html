@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vault Agent PKI — NetScaler Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      background: #f7f8fa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 2.5rem 3rem;
+      max-width: 520px;
+      text-align: center;
+    }
+    h1 { color: #1f2328; margin-top: 0; }
+    p  { color: #57606a; line-height: 1.6; }
+    .badge {
+      display: inline-block;
+      background: #3b82d4;
+      color: #fff;
+      font-size: 0.78rem;
+      padding: 0.2rem 0.7rem;
+      border-radius: 4px;
+      margin-top: 0.5rem;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>&#128274; TLS is active</h1>
+    <p>
+      This page is served over HTTPS by <strong>Citrix NetScaler CPX</strong>
+      using a certificate issued and automatically renewed by
+      <strong>HashiCorp Vault</strong>.
+    </p>
+    <p>
+      Vault Agent monitors the certificate TTL, re-issues it from the
+      <code>pki_int/issue/netscaler</code> role before expiry, and uploads
+      the new material to NetScaler via the NITRO REST API — with zero
+      downtime.
+    </p>
+    <span class="badge">Vault Agent PKI Demo</span>
+  </div>
+</body>
+</html>

@@ -136,7 +136,7 @@ Use `ask_followup_question`:
 
 ## Phase 3 — Apply Terraform
 
-**Explain:** "Terraform provisions all Vault infrastructure: two PKI secrets engines (root + intermediate CA), four PKI roles (`demoissuer`, `nginx`, `haproxy`, `datapower`), ACL policies, token auth backend roles, and a file audit device. This takes about 30 seconds."
+**Explain:** "Terraform does everything in one shot: it provisions two PKI secrets engines (root + intermediate CA), four PKI roles, ACL policies, and token auth backend roles in Vault; mints one scoped service token per agent role and writes it to `.vault-token-<service>` at the repo root; and generates bootstrap TLS certificates (signed by a `terraform.hashicorp.ibm` CA with a 7-day TTL) for DataPower, nginx, and HAProxy so all containers can start immediately without any prior Vault Agent run. This takes about 30 seconds."
 
 Run with `execute_command` (cwd: `terraform`):
 ```bash
@@ -144,39 +144,26 @@ terraform init -no-color && terraform apply -auto-approve -no-color
 ```
 Use `cwd: "terraform"` so Terraform finds its working directory.
 
-After the command finishes, show the output section labelled `Outputs:` to the user and explain what each value means (mount paths, role names, issue paths).
+After the command finishes, show the output section labelled `Outputs:` to the user and explain what each value means (mount paths, role names, issue paths, token file paths).
+
+Verify that all token files and bootstrap cert files were written:
+```bash
+ls -lh .vault-token-nginx .vault-token-haproxy .vault-token-datapower .vault-token-netscaler \
+       certs/nginx-cert.pem certs/nginx-privkey.pem \
+       certs/haproxy-cert.pem certs/haproxy-privkey.pem certs/haproxy-bundle.pem \
+       certs/netscaler-cert.pem certs/netscaler-privkey.pem \
+       datapower/certs/webgui-sscert.pem datapower/certs/demo-sscert.pem
+```
 
 Use `ask_followup_question`:
-- **Question:** "Terraform applied — ready to issue scoped tokens?"
-- **Suggestion A:** "Yes — issue tokens"
+- **Question:** "Terraform applied — which flows do you want to run?"
+- **Suggestion A:** "Continue to flow selection"
 - **Suggestion B:** "No, stop here"
 - **Suggestion C:** "Show me the Terraform outputs again"
 
 ---
 
-## Phase 4 — Issue Per-Service Tokens
-
-**Explain:** "Each Vault Agent authenticates with a least-privilege token that only has access to the PKI role it needs. `issue-tokens.sh` mints three tokens and writes them to `.vault-token-nginx`, `.vault-token-haproxy`, and `.vault-token-datapower` — one per service, and all three may be needed depending on which flows you select."
-
-Run with `execute_command`:
-```bash
-bash ./issue-tokens.sh
-```
-
-Verify the token files were created:
-```bash
-ls -lh .vault-token-nginx .vault-token-haproxy .vault-token-datapower
-```
-
-Use `ask_followup_question`:
-- **Question:** "Tokens issued — which flows do you want to run?"
-- **Suggestion A:** "Continue to flow selection"
-- **Suggestion B:** "No, stop here"
-- **Suggestion C:** "Re-run ls to verify the token files"
-
----
-
-## Phase 5 — Choose Flows
+## Phase 4 — Choose Flows
 
 Use `ask_followup_question` with `allow_multiple: true`:
 
@@ -185,6 +172,7 @@ Use `ask_followup_question` with `allow_multiple: true`:
 - **Suggestion B:** "nginx — Vault Agent provisions a TLS cert and auto-reloads nginx on renewal"
 - **Suggestion C:** "HAProxy — Vault Agent provisions a TLS cert and sends SIGHUP to HAProxy on renewal"
 - **Suggestion D:** "DataPower — Vault Agent provisions TLS certs, starts the IBM DataPower container, and auto-uploads renewed certs via the REST Management API"
+- **Suggestion E:** "NetScaler — Vault Agent provisions a TLS cert, starts the Citrix NetScaler CPX container, and auto-uploads renewed certs via the NITRO REST API"
 
 Record which flows were selected and run only those phases below.
 
@@ -217,22 +205,15 @@ Use `ask_followup_question`:
 
 ## Phase 6B — nginx Flow (run only if selected)
 
-### Step 1 — Issue Initial Certificate
+### Step 1 — Start nginx Container
 
-**Explain:** "We need the cert on disk before the nginx container starts, so we run the agent once with `-exit-after-auth`. The `exec` block (which calls `nginx/reload-nginx.sh`) will fail because the container isn't running yet — that's expected and safe."
+**Explain:** "Bootstrap certs (`certs/nginx-cert.pem`, `certs/nginx-privkey.pem`) were written by `terraform apply` — no separate init step needed."
 
-Run with `execute_command`:
-```bash
-vault agent -config=./nginx.hcl -exit-after-auth
-```
-
-Verify:
+Verify the files are present:
 ```bash
 ls -lh certs/nginx-cert.pem certs/nginx-privkey.pem
-openssl x509 -in certs/nginx-cert.pem -noout -subject -dates
+openssl x509 -in certs/nginx-cert.pem -noout -subject -issuer -dates
 ```
-
-### Step 2 — Start nginx Container
 
 **Explain:** "The script starts an `nginx:alpine` container via Podman, mounts the config and the `certs/` directory read-only, and exposes HTTP on `8080` (redirect only) and HTTPS on `8443`."
 
@@ -251,9 +232,9 @@ Optionally verify TLS:
 curl -sk https://localhost:8443 | head -5
 ```
 
-### Step 3 — Continuous Renewal Agent
+### Step 2 — Continuous Renewal Agent
 
-**Explain:** "`vault agent -config=./nginx.hcl` (without `-exit-after-auth`) runs indefinitely. It watches the cert TTL and re-issues before expiry, then calls `nginx/reload-nginx.sh` — which sends `nginx -s reload` inside the container — so nginx picks up the new cert with zero downtime. This is a long-running process and must run in a separate terminal."
+**Explain:** "`vault agent -config=./nginx.hcl` runs indefinitely. It watches the cert TTL and re-issues before expiry from Vault's `pki_int/issue/nginx` role, then calls `nginx/reload-nginx.sh` — which sends `nginx -s reload` inside the container — so nginx picks up the new cert with zero downtime. This is a long-running process and must run in a separate terminal."
 
 Print this command for the user to copy:
 ```
@@ -309,32 +290,15 @@ Point out the new `notBefore` and changed fingerprint as live proof that Vault A
 
 ## Phase 6C — HAProxy Flow (run only if selected)
 
-### Step 1 — Issue Initial Certificate
+### Step 1 — Start HAProxy Container
 
-**Explain:** "Same pattern as nginx: we seed the cert files with a one-shot agent run before starting the container. HAProxy needs the private key and cert concatenated into a single bundle file, which `reload-haproxy.sh` handles on every renewal — but we do it manually for the first run."
+**Explain:** "Bootstrap certs (`certs/haproxy-cert.pem`, `certs/haproxy-privkey.pem`, and the pre-assembled `certs/haproxy-bundle.pem`) were written by `terraform apply` — no separate init step or manual bundle assembly needed."
 
-Run with `execute_command`:
+Verify the files are present:
 ```bash
-vault agent -config=./haproxy.hcl -exit-after-auth
+ls -lh certs/haproxy-cert.pem certs/haproxy-privkey.pem certs/haproxy-bundle.pem
+openssl x509 -in certs/haproxy-cert.pem -noout -subject -issuer -dates
 ```
-
-Verify:
-```bash
-ls -lh certs/haproxy-cert.pem certs/haproxy-privkey.pem
-openssl x509 -in certs/haproxy-cert.pem -noout -subject -dates
-```
-
-### Step 2 — Assemble the Initial Bundle
-
-**Explain:** "HAProxy requires its TLS file to contain the private key first, then the certificate chain. We concatenate them now so the container has a valid bundle on startup."
-
-Run with `execute_command`:
-```bash
-cat certs/haproxy-privkey.pem certs/haproxy-cert.pem > certs/haproxy-bundle.pem
-ls -lh certs/haproxy-bundle.pem
-```
-
-### Step 3 — Start HAProxy Container
 
 **Explain:** "The script starts an `haproxy:alpine` container via Podman, mounts the config and `certs/` read-only, and exposes HTTP on `8090` and HTTPS on `8453`."
 
@@ -353,9 +317,9 @@ Optionally verify TLS:
 curl -sk https://localhost:8453 | head -5
 ```
 
-### Step 4 — Continuous Renewal Agent
+### Step 2 — Continuous Renewal Agent
 
-**Explain:** "`vault agent -config=./haproxy.hcl` runs indefinitely. On each cert renewal it calls `haproxy/reload-haproxy.sh`, which rebuilds `certs/haproxy-bundle.pem` and sends `SIGHUP` to the `haproxy-vault` container for a graceful reload. This is a long-running process and must run in a separate terminal."
+**Explain:** "`vault agent -config=./haproxy.hcl` runs indefinitely. On each cert renewal from Vault's `pki_int/issue/haproxy` role it calls `haproxy/reload-haproxy.sh`, which rebuilds `certs/haproxy-bundle.pem` and sends `SIGHUP` to the `haproxy-vault` container for a graceful reload. This is a long-running process and must run in a separate terminal."
 
 Print this command for the user to copy:
 ```
@@ -411,28 +375,22 @@ Point out the new `notBefore` and changed fingerprint as live proof that Vault A
 
 ## Phase 6D — DataPower Flow (run only if selected)
 
-### Step 1 — Issue Initial Certificates
+### Step 1 — Start the DataPower Container
 
-**Explain:** "`datapower-init.hcl` is a one-shot config that renders three certificate templates (`dp-webgui.vtmpl`, `dp-ui.vtmpl`, `dp-demo.vtmpl`) into `datapower/certs/` and exits. We need these files on disk before the container starts, otherwise DataPower's TLS contexts have nothing to load."
+**Explain:** "Bootstrap certs for all three DataPower TLS contexts (`webgui`, `DP-UI`, `demo`) plus the shared `ca.pem` were written to `datapower/certs/` by `terraform apply` — no separate init agent run needed."
 
-Run with `execute_command`:
-```bash
-vault agent -config=./datapower-init.hcl -exit-after-auth
-```
-
-Verify the cert files were written:
+Verify the cert files are present:
 ```bash
 ls -lh datapower/certs/
-openssl x509 -in datapower/certs/demo-sscert.pem -noout -subject -dates
+openssl x509 -in datapower/certs/demo-sscert.pem -noout -subject -issuer -dates
 ```
 
 Use `ask_followup_question`:
-- **Question:** "Initial DataPower certs are on disk — ready to start the container?"
+- **Question:** "Bootstrap certs confirmed — ready to start the DataPower container?"
 - **Suggestion A:** "Yes — start DataPower"
 - **Suggestion B:** "No, stop here"
 - **Suggestion C:** "Re-run openssl to inspect a cert"
 
-### Step 2 — Start the DataPower Container
 
 **Explain:** "`start-datapower.sh` launches `icr.io/cpopen/datapower/datapower-limited:11.0.0.1` via Podman with `--privileged`, mounts `datapower/certs/` into `cert:///` inside the container, and exposes four ports. **This is a long-running, interactive process** — it must run in a separate terminal, and it must be started from the `datapower/` directory (the script hard-codes relative paths)."
 
@@ -460,7 +418,7 @@ Use `ask_followup_question`:
 
 **If the user picks C:** run `podman logs my-datapower 2>&1 | tail -30` and explain the output.
 
-### Step 3 — Wait for DataPower to Be Ready
+### Step 2 — Wait for DataPower to Be Ready
 
 **Explain:** "DataPower's REST Management API becomes reachable once the runtime is initialised. We poll it until it responds."
 
@@ -490,7 +448,7 @@ curl -sk -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
 ```
 Show the output and explain that the cert files listed there are what DataPower's TLS contexts are currently using.
 
-### Step 4 — Continuous Renewal Agent
+### Step 3 — Continuous Renewal Agent
 
 **Explain:** "`vault agent -config=./datapower.hcl` runs indefinitely. It watches the TTL of the demo cert rendered by `templates/dp-demo-1m.vtmpl` and re-issues it before expiry. After each renewal it calls `datapower/upload-certs-to-datapower.sh`, which: (1) uploads the new `demo-sscert.pem` and `demo-privkey.pem` to the DataPower cert filestore via PUT, (2) reloads the `CryptoCertificate/demo` and `CryptoKey/demo` config objects so the running TLS context picks up the new material — uploading the file alone is not enough. This is a long-running process and must run in a separate terminal."
 
@@ -520,8 +478,8 @@ echo "" | openssl s_client -connect localhost:8043 -showcerts 2>/dev/null | open
 ```
 
 Explain the output:
-- **Subject** confirms it's the `demo.datapower.hashicorp.ibm` leaf cert issued by Vault.
-- **Issuer** should be `CN=vault.hashicorp.ibm Intermediate CA` — the `pki_int` engine.
+- **Subject** confirms it's the `demo.datapower.hashicorp.ibm` leaf cert.
+- **Issuer** — on first start this will be `CN=terraform.hashicorp.ibm` (the bootstrap CA). After Vault Agent's first renewal cycle it switches to `CN=vault.hashicorp.ibm Intermediate CA` (`pki_int`). Both are correct depending on timing.
 - **Dates** reveal the short TTL (`dp-demo-1m.vtmpl` uses ~90 seconds) — watch the `notBefore` advance on successive runs to confirm the agent is rotating the cert automatically.
 - **Fingerprint** can be compared across renewals to confirm a new cert was issued.
 
@@ -551,6 +509,127 @@ Point out the new `notBefore` and changed fingerprint as live proof that Vault A
 
 ---
 
+## Phase 6E — NetScaler Flow (run only if selected)
+
+### Step 1 — Start the NetScaler CPX Container
+
+**Explain:** "Bootstrap certs (`certs/netscaler-cert.pem`, `certs/netscaler-privkey.pem`) were written by `terraform apply` — no separate init step needed."
+
+Verify the files are present:
+```bash
+ls -lh certs/netscaler-cert.pem certs/netscaler-privkey.pem
+openssl x509 -in certs/netscaler-cert.pem -noout -subject -issuer -dates
+```
+
+**Explain:** "The script starts a `store/citrix/netscalercpx` container via Podman with `--privileged`, mounts `certs/` read-only at `/nsconfig/ssl` (NetScaler's default SSL file directory), and exposes HTTP on `9080`, HTTPS on `9443`, and the NITRO REST API on `32080`."
+
+Run with `execute_command`:
+```bash
+bash netscaler/start-netscaler.sh
+```
+
+Then check the container is up:
+```bash
+podman ps --filter name=netscaler-vault --format "{{.Names}}  {{.Status}}"
+```
+
+### Step 2 — Wait for NetScaler CPX to Be Ready
+
+**Explain:** "NetScaler's NITRO API becomes reachable once the data-plane is initialised. We poll it until it responds."
+
+Run with `execute_command` (retry up to 12 times, 5-second gap = 60 s max):
+```bash
+for i in $(seq 1 12); do
+  echo "Attempt $i/12..."
+  code=$(curl -sf -X POST http://localhost:32080/nitro/v1/config/login \
+    -H "Content-Type: application/json" \
+    -d '{"login":{"username":"nsroot","password":"nsroot"}}' \
+    -o /dev/null -w "%{http_code}")
+  echo "HTTP $code"
+  [ "$code" = "201" ] && echo "NetScaler NITRO API is up!" && break
+  sleep 5
+done
+```
+
+If the loop exhausts all 12 attempts without a 201, tell the user NetScaler CPX is still booting or unreachable and ask them to check `podman logs netscaler-vault` before retrying.
+
+Use `ask_followup_question`:
+- **Question:** "NetScaler is up — ready to start the continuous renewal agent?"
+- **Suggestion A:** "Yes — start the renewal agent"
+- **Suggestion B:** "No, stop here"
+- **Suggestion C:** "Verify the NITRO certkey object via curl first"
+
+**If the user picks C:** run:
+```bash
+curl -sf -X POST http://localhost:32080/nitro/v1/config/login \
+  -H "Content-Type: application/json" \
+  -c /tmp/ns-check.txt \
+  -d '{"login":{"username":"nsroot","password":"nsroot"}}' && \
+curl -sf -b /tmp/ns-check.txt http://localhost:32080/nitro/v1/config/sslcertkey/vault-demo
+```
+Show the output and explain that `vault-demo` is the certkey object Vault Agent will update on each renewal.
+
+### Step 3 — Continuous Renewal Agent
+
+**Explain:** "`vault agent -config=./netscaler.hcl` runs indefinitely. It watches the TTL of the cert rendered by `templates/netscaler-cert.vtmpl` and re-issues it from Vault's `pki_int/issue/netscaler` role before expiry. After each renewal it calls `netscaler/upload-certs-to-netscaler.sh`, which: (1) logs in to the NITRO API, (2) uploads the new `netscaler-cert.pem` and `netscaler-privkey.pem` to `/nsconfig/ssl/` via the `systemfile` endpoint, (3) updates the `sslcertkey` object `vault-demo` so NetScaler immediately pushes the new material to all bound virtual servers — no rebind required, (4) saves the running config. This is a long-running process and must run in a separate terminal."
+
+**Important:** `upload-certs-to-netscaler.sh` uses relative paths (`certs/netscaler-cert.pem`) so the agent **must be run from the repo root** — never from the `netscaler/` subdirectory.
+
+Print this command for the user to copy:
+```
+vault agent -config=./netscaler.hcl
+```
+
+Use `ask_followup_question`:
+- **Question:** "Is Vault Agent for NetScaler running in a separate terminal?"
+- **Suggestion A:** "Yes — it's running, continue"
+- **Suggestion B:** "Not yet, give me a moment"
+- **Suggestion C:** "Run it for me in the background instead"
+
+**If the user picks C (run in background):** run with `execute_command`:
+```bash
+vault agent -config=./netscaler.hcl > /tmp/vault-agent-netscaler.log 2>&1 &
+echo "Vault Agent NetScaler PID: $!"
+sleep 5 && tail -10 /tmp/vault-agent-netscaler.log
+```
+
+After confirmation (A or C), verify the cert NetScaler is actively serving by reading it directly from the TLS handshake on the HTTPS port (`9443`):
+```bash
+echo "" | openssl s_client -connect localhost:9443 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+
+Explain the output:
+- **Subject** confirms it's the `netscaler.hashicorp.ibm` leaf cert.
+- **Issuer** — on first start this will be `CN=terraform.hashicorp.ibm` (the bootstrap CA). After Vault Agent's first renewal cycle it switches to `CN=vault.hashicorp.ibm Intermediate CA` (`pki_int`). Both are correct depending on timing.
+- **Dates** reveal the short TTL (`netscaler-cert.vtmpl` uses 2 minutes).
+- **Fingerprint** can be compared across renewals to confirm a new cert was issued.
+
+Use `ask_followup_question`:
+- **Question:** "NetScaler flow complete — what would you like to do next?"
+- **Suggestion A:** "Continue to teardown (or next flow)"
+- **Suggestion B:** "Stop here, leave everything running"
+- **Suggestion C:** "Re-run the TLS handshake check to see if the cert has already rotated"
+- **Suggestion D:** "Wait for the next rotation and verify it live"
+
+**If the user picks C:** re-run the same `openssl s_client` command and compare the `notBefore` and fingerprint against the previous output.
+
+**If the user picks D:** capture the current fingerprint, then poll until it changes (~2 min TTL):
+```bash
+old=$(echo "" | openssl s_client -connect localhost:9443 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+echo "Current fingerprint: $old"
+echo "Waiting for rotation (checking every 10s, up to 3 min — 2m TTL)..."
+for i in $(seq 1 18); do
+  sleep 10
+  new=$(echo "" | openssl s_client -connect localhost:9443 -showcerts 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+  echo "[$i/18] $new"
+  [ "$new" != "$old" ] && echo "Cert rotated on NetScaler!" && break
+done
+echo "" | openssl s_client -connect localhost:9443 -showcerts 2>/dev/null | openssl x509 -noout -subject -issuer -dates -fingerprint -sha256
+```
+Point out the new `notBefore` and changed fingerprint as live proof that Vault Agent renewed the cert and NetScaler picked it up automatically via the NITRO REST API.
+
+---
+
 ## Phase 7 — Teardown (optional)
 
 Use `ask_followup_question`:
@@ -574,11 +653,12 @@ Use `ask_followup_question`:
 kill $(cat ./pidfile-nginx 2>/dev/null) 2>/dev/null
 kill $(cat ./pidfile-haproxy 2>/dev/null) 2>/dev/null
 kill $(cat ./pidfile-datapower 2>/dev/null) 2>/dev/null
+kill $(cat ./pidfile-netscaler 2>/dev/null) 2>/dev/null
 # — or, to stop everything in one shot:
 pkill -f 'vault agent' 2>/dev/null
 
 # Stop containers (DataPower may take ~15 s to stop gracefully):
-podman stop nginx-vault haproxy-vault my-datapower 2>/dev/null
+podman stop nginx-vault haproxy-vault my-datapower netscaler-vault 2>/dev/null
 ```
 Then re-ask the confirmation question.
 
@@ -587,13 +667,12 @@ Once confirmed, run with `execute_command` (cwd: `terraform`):
 terraform destroy -auto-approve -no-color
 ```
 
-Then clean up token files and cert/out files:
+Then clean up remaining cert/out files:
 ```bash
-rm -f .vault-token-nginx .vault-token-haproxy .vault-token-datapower
 bash ./cleanup.sh
 ```
 
-**Explain what was removed:** Terraform destroyed the PKI engines, roles, policies, and token auth backend roles from Vault. `cleanup.sh` deleted all generated `.pem` and `.out` files. The `.vault-token` (root dev token copy) is also gone.
+**Explain what was removed:** Terraform destroyed the PKI engines, roles, policies, token auth backend roles, minted service tokens, and bootstrap cert files from Vault. Token files (`.vault-token-nginx`, `.vault-token-haproxy`, `.vault-token-datapower`, `.vault-token-netscaler`) and bootstrap PEM files are managed as `local_sensitive_file` resources so `terraform destroy` removes them automatically. `cleanup.sh` cleans up any remaining `.pem` and `.out` files (e.g. certs written by Vault Agent after it ran).
 
 Print a final summary:
 ```

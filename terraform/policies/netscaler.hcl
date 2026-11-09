@@ -1,0 +1,21 @@
+# ACL policy — NetScaler certificate issuance
+# Grants the minimum rights needed by a NetScaler Vault Agent to request
+# certificates from the intermediate PKI role "netscaler".
+
+path "pki_int/issue/netscaler" {
+  capabilities = ["create", "update"]
+}
+
+path "pki_int/sign/netscaler" {
+  capabilities = ["create", "update"]
+}
+
+# Allow reading the intermediate CA certificate (chain validation)
+path "pki_int/cert/ca" {
+  capabilities = ["read"]
+}
+
+# Allow reading CRL
+path "pki_int/crl" {
+  capabilities = ["read"]
+}

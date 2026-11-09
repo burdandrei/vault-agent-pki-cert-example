@@ -21,9 +21,8 @@ auto_auth {
 #   2. Validates the HAProxy config
 #   3. Gracefully reloads HAProxy with the new bundle
 #
-# For the initial cert render before starting HAProxy, run with -exit-after-auth:
-#   vault agent -config=./haproxy.hcl -exit-after-auth
-# The exec block does not fire when the agent exits after auth.
+# Bootstrap certs (7-day TTL, terraform.hashicorp.ibm CA) are written by
+# `terraform apply` so the container can start before this agent runs.
 template {
   source      = "templates/haproxy-cert.vtmpl"
   destination = "certs/haproxy-cert.pem"

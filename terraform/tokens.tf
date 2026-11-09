@@ -33,9 +33,19 @@ resource "vault_token_auth_backend_role" "haproxy" {
   token_type       = "service"
 }
 
+resource "vault_token_auth_backend_role" "netscaler" {
+  role_name        = "netscaler"
+  allowed_policies = [vault_policy.netscaler.name]
+  orphan           = true
+  renewable        = true
+  token_ttl        = 3600
+  token_max_ttl    = 86400
+  token_type       = "service"
+}
+
 # ---------------------------------------------------------------------------
 # Mint one service token per issuer — written to the repo root so each
-# Vault Agent config (datapower.hcl, nginx.hcl, haproxy.hcl) can read it.
+# Vault Agent config (datapower.hcl, nginx.hcl, haproxy.hcl, netscaler.hcl) can read it.
 #
 # vault_token (resource) is used instead of the ephemeral block because
 # ephemeral blocks are evaluated at plan time, before the
@@ -95,5 +105,22 @@ resource "local_sensitive_file" "vault_token_nginx" {
 resource "local_sensitive_file" "vault_token_haproxy" {
   filename        = "${path.module}/../.vault-token-haproxy"
   content         = vault_token.haproxy.client_token
+  file_permission = "0600"
+}
+
+resource "vault_token" "netscaler" {
+  role_name    = vault_token_auth_backend_role.netscaler.role_name
+  policies     = [vault_policy.netscaler.name]
+  ttl          = "1h"
+  display_name = "netscaler-agent"
+  renewable    = true
+  no_parent    = true
+
+  depends_on = [vault_token_auth_backend_role.netscaler]
+}
+
+resource "local_sensitive_file" "vault_token_netscaler" {
+  filename        = "${path.module}/../.vault-token-netscaler"
+  content         = vault_token.netscaler.client_token
   file_permission = "0600"
 }

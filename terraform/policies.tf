@@ -17,6 +17,11 @@ resource "vault_policy" "haproxy" {
   policy = file("${path.module}/policies/haproxy.hcl")
 }
 
+resource "vault_policy" "netscaler" {
+  name   = "netscaler-pki"
+  policy = file("${path.module}/policies/netscaler.hcl")
+}
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
@@ -34,4 +39,9 @@ output "nginx_policy_name" {
 output "haproxy_policy_name" {
   description = "Vault ACL policy name for the HAProxy issuer."
   value       = vault_policy.haproxy.name
+}
+
+output "netscaler_policy_name" {
+  description = "Vault ACL policy name for the NetScaler issuer."
+  value       = vault_policy.netscaler.name
 }

@@ -156,3 +156,15 @@ resource "vault_pki_secret_backend_role" "haproxy" {
   allow_subdomains    = true
   max_ttl             = "259200" # 72h
 }
+
+# ---------------------------------------------------------------------------
+# PKI role – netscaler  –  issues from intermediate (Vault Agent pkiCert)
+# ---------------------------------------------------------------------------
+resource "vault_pki_secret_backend_role" "netscaler" {
+  backend             = vault_mount.pki_int.path
+  name                = "netscaler"
+  allowed_domains     = ["netscaler.hashicorp.ibm"]
+  allow_bare_domains  = true
+  allow_subdomains    = true
+  max_ttl             = "259200" # 72h
+}

@@ -1,11 +1,12 @@
 # Vault Agent PKI Certificate Example
 
-This repository demonstrates four Vault Agent workflows:
+This repository demonstrates five Vault Agent workflows:
 
 1. **Basic** — Vault Agent requests and renews a PKI certificate from Vault.
 2. **DataPower** — Vault Agent generates certificates for IBM DataPower, starts the container, and keeps selected certificates updated via the DataPower REST Management API.
 3. **nginx** — Vault Agent provisions TLS certificates for nginx and reloads the server on each renewal.
 4. **HAProxy** — Vault Agent provisions TLS certificates for HAProxy and reloads the server on each renewal.
+5. **NetScaler** — Vault Agent generates certificates for Citrix NetScaler CPX, starts the container, and keeps the SSL certkey object updated via the NITRO REST API.
 
 Infrastructure (audit device, PKI engine, root CA, intermediate CA, roles, ACL policies, and token auth backend roles) is managed with Terraform.
 
@@ -13,9 +14,10 @@ Infrastructure (audit device, PKI engine, root CA, intermediate CA, roles, ACL p
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.3
 - [Vault CLI](https://developer.hashicorp.com/vault/downloads)
-- [Podman](https://podman.io/docs/installation) *(nginx, HAProxy, and DataPower flows)*
+- [Podman](https://podman.io/docs/installation) *(nginx, HAProxy, DataPower, and NetScaler flows)*
 - IBM DataPower container image access *(DataPower flow only)*
-- `curl` available *(DataPower flow only)*
+- Citrix NetScaler CPX container image access *(NetScaler flow only)*
+- `curl` available *(DataPower and NetScaler flows)*
 
 ---
 
@@ -52,13 +54,17 @@ The Terraform configuration in `./terraform` provisions:
 - PKI role `datapower` (allowed domain `datapower.hashicorp.ibm`, max TTL 72h)
 - PKI role `nginx` (allowed domain `nginx.hashicorp.ibm`, max TTL 72h)
 - PKI role `haproxy` (allowed domain `haproxy.hashicorp.ibm`, max TTL 72h)
+- PKI role `netscaler` (allowed domain `netscaler.hashicorp.ibm`, max TTL 72h)
 - ACL policy `datapower-pki` — least-privilege access to `pki_int/issue/datapower` (defined in `terraform/policies/datapower.hcl`)
 - ACL policy `nginx-pki` — least-privilege access to `pki_int/issue/nginx` (defined in `terraform/policies/nginx.hcl`)
 - ACL policy `haproxy-pki` — least-privilege access to `pki_int/issue/haproxy` (defined in `terraform/policies/haproxy.hcl`)
+- ACL policy `netscaler-pki` — least-privilege access to `pki_int/issue/netscaler` (defined in `terraform/policies/netscaler.hcl`)
 - Token auth backend role `datapower` — restricts minted tokens to `datapower-pki`
 - Token auth backend role `nginx` — restricts minted tokens to `nginx-pki`
 - Token auth backend role `haproxy` — restricts minted tokens to `haproxy-pki`
-- Service token for each role, written to `.vault-token-datapower`, `.vault-token-nginx`, and `.vault-token-haproxy` at the repo root (`chmod 600`)
+- Token auth backend role `netscaler` — restricts minted tokens to `netscaler-pki`
+- Service token for each role, written to `.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`, and `.vault-token-netscaler` at the repo root (`chmod 600`)
+- Bootstrap TLS certificates for DataPower, nginx, HAProxy, and NetScaler — signed by the `terraform.hashicorp.ibm` CA, 7-day TTL — written directly to `datapower/certs/` and `certs/` so containers can start without a prior Vault Agent run
 
 ```bash
 cd terraform
@@ -78,17 +84,20 @@ After a successful apply, Terraform prints the outputs:
 | `datapower_issue_path`        | Vault path for DataPower certificate issuance            |
 | `nginx_issue_path`            | Vault path for nginx certificate issuance                |
 | `haproxy_issue_path`          | Vault path for HAProxy certificate issuance              |
+| `netscaler_issue_path`        | Vault path for NetScaler certificate issuance            |
 | `vault_token_datapower_file`  | Path of the token file written for the DataPower agent   |
 | `vault_token_nginx_file`      | Path of the token file written for the nginx agent       |
 | `vault_token_haproxy_file`    | Path of the token file written for the HAProxy agent     |
+| `vault_token_netscaler_file`  | Path of the token file written for the NetScaler agent   |
 
 `terraform apply` also mints one scoped service token per agent role and writes it to the repo root:
 
-| Token file               | Policy attached | Consumed by                            |
-| ------------------------ | --------------- | -------------------------------------- |
-| `.vault-token-datapower` | `datapower-pki` | `datapower.hcl`, `datapower-init.hcl` |
-| `.vault-token-nginx`     | `nginx-pki`     | `nginx.hcl`                            |
-| `.vault-token-haproxy`   | `haproxy-pki`   | `haproxy.hcl`                          |
+| Token file                | Policy attached  | Consumed by             |
+| ------------------------- | ---------------- | ----------------------- |
+| `.vault-token-datapower`  | `datapower-pki`  | `datapower.hcl`         |
+| `.vault-token-nginx`      | `nginx-pki`      | `nginx.hcl`             |
+| `.vault-token-haproxy`    | `haproxy-pki`    | `haproxy.hcl`           |
+| `.vault-token-netscaler`  | `netscaler-pki`  | `netscaler.hcl`         |
 
 Each file is written with `chmod 600`. To rotate a token, run `terraform apply` again — Terraform will replace the `vault_token` resource and overwrite the file.
 
@@ -118,7 +127,6 @@ openssl x509 -in certs/cert.pem -noout -dates
 
 ```text
 ./
-├── datapower-init.hcl          # one-shot agent config: renders all initial certs and exits
 ├── datapower.hcl               # continuous agent config: renews demo cert and uploads to DataPower
 ├── templates/
 │   ├── dp-webgui.vtmpl         # WebGUI certificate template
@@ -132,21 +140,9 @@ openssl x509 -in certs/cert.pem -noout -dates
 │   └── local/
 ```
 
-### Step 1 — Generate initial certificates
+Bootstrap certificates (signed by `terraform.hashicorp.ibm`, 7-day TTL) are written to `datapower/certs/` by `terraform apply` — no separate init step required.
 
-Run Vault Agent once from the repository root to render the initial certificate set before starting DataPower:
-
-```bash
-vault agent -config=./datapower-init.hcl -exit-after-auth #-log-level debug
-```
-
-[`datapower-init.hcl`](datapower-init.hcl) renders:
-
-- `templates/webgui.vtmpl` → `certs/webgui.out`
-- `templates/dp-ui.vtmpl` → `certs/dp-ui.out`
-- `templates/demo.vtmpl` → `certs/demo.out`
-
-### Step 2 — Start DataPower
+### Step 1 — Start DataPower
 
 ```bash
 cd datapower
@@ -255,9 +251,7 @@ curl -k -u admin:admin https://localhost:5554/mgmt/filestore/default/cert/
 
 ### Troubleshooting
 
-**Vault Agent exits immediately** — If `-exit-after-auth` was passed, this is expected for the initial one-shot render.
-
-**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, the relevant `.vault-token-<service>` file exists (run `terraform apply` from `terraform/`), and the templates reference valid PKI paths.
+**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, the relevant `.vault-token-<service>` file exists, and the templates reference valid PKI paths. Re-run `terraform apply` from `terraform/` to regenerate both tokens and bootstrap certs.
 
 **Upload to DataPower fails** — Verify DataPower is running, REST Management API is reachable on `https://localhost:5554`, credentials match the container, and the expected cert files exist in `certs/`.
 
@@ -283,15 +277,9 @@ Vault Agent provisions a TLS certificate for nginx and reloads the server whenev
 │   └── success.html                # page served over HTTPS
 ```
 
-### Step 1 — Issue the initial certificate
+Bootstrap certificates (signed by `terraform.hashicorp.ibm`, 7-day TTL) are written to `certs/` by `terraform apply` — no separate init step required.
 
-Run Vault Agent once to populate the cert files before starting the container:
-
-```bash
-vault agent -config=./nginx.hcl -exit-after-auth
-```
-
-### Step 2 — Start the nginx container
+### Step 1 — Start the nginx container
 
 The container mounts `nginx/nginx.conf`, `nginx/success.html`, and `certs/` read-only:
 
@@ -305,7 +293,7 @@ bash nginx/start-nginx.sh
 vault agent -log-level debug -config=./nginx.hcl
 ```
 
-[`nginx.hcl`](nginx.hcl) renders [`templates/nginx-cert.vtmpl`](templates/nginx-cert.vtmpl) to `certs/nginx-cert.pem`, writing the private key to `certs/nginx-privkey.pem` via `writeToFile`, then runs [`nginx/reload-nginx.sh`](nginx/reload-nginx.sh) which sends `nginx -s reload` inside the running container. On first run (`-exit-after-auth`) the exec command errors because the container isn't started yet — this is expected.
+[`nginx.hcl`](nginx.hcl) renders [`templates/nginx-cert.vtmpl`](templates/nginx-cert.vtmpl) to `certs/nginx-cert.pem`, writing the private key to `certs/nginx-privkey.pem` via `writeToFile`, then runs [`nginx/reload-nginx.sh`](nginx/reload-nginx.sh) which sends `nginx -s reload` inside the running container.
 
 ### How it works
 
@@ -344,32 +332,17 @@ Vault Agent provisions a TLS certificate for HAProxy and reloads the server when
 │   └── success.html                # page served over HTTPS
 ```
 
-### Step 1 — Generate the initial certificate
+Bootstrap certificates (signed by `terraform.hashicorp.ibm`, 7-day TTL) including the pre-assembled `certs/haproxy-bundle.pem` are written to `certs/` by `terraform apply` — no separate init step required.
 
-Run `haproxy.hcl` with `-exit-after-auth` to populate the cert files before starting HAProxy.
-The `exec` block does not fire when the agent exits after auth, so `reload-haproxy.sh` is not called on this run.
-
-```bash
-vault agent -config=./haproxy.hcl -exit-after-auth
-```
-
-[`haproxy.hcl`](haproxy.hcl) renders [`templates/haproxy-cert.vtmpl`](templates/haproxy-cert.vtmpl), writing:
-
-- `certs/haproxy-cert.pem` — certificate + CA chain (template destination)
-- `certs/haproxy-privkey.pem` — private key (written via `writeToFile`)
-
-### Step 2 — Assemble the initial bundle and start HAProxy
-
-Assemble the bundle first so the container has a valid cert on startup, then start the container:
+### Step 1 — Start HAProxy
 
 ```bash
-cat certs/haproxy-privkey.pem certs/haproxy-cert.pem > certs/haproxy-bundle.pem
 bash haproxy/start-haproxy.sh
 ```
 
 The container mounts `haproxy/haproxy.cfg` and `certs/` read-only at `/certs`.
 
-### Step 3 — Run continuous Vault Agent renewal
+### Step 2 — Run continuous Vault Agent renewal
 
 ```bash
 vault agent -config=./haproxy.hcl
@@ -384,7 +357,7 @@ vault agent -config=./haproxy.hcl
 
 | File                           | Purpose                                                                   |
 | ------------------------------ | ------------------------------------------------------------------------- |
-| `haproxy.hcl`                  | Initial render (`-exit-after-auth`) and continuous renewal + reload       |
+| `haproxy.hcl`                  | Continuous renewal + reload (bootstrap certs from `terraform apply`)      |
 | `haproxy/start-haproxy.sh`     | Starts `haproxy:alpine` container via Podman, mounts config + certs       |
 | `haproxy/success.html`         | Static HTML page served at `/`                                            |
 | `templates/haproxy-cert.vtmpl` | Requests cert from `pki_int/issue/haproxy`, writes key + cert+chain       |
@@ -399,20 +372,147 @@ openssl x509 -in certs/haproxy-cert.pem -noout -dates
 
 ---
 
+## NetScaler Flow — Certificate Auto-Update
+
+Vault Agent provisions a TLS certificate for Citrix NetScaler CPX and updates the SSL certkey object via the NITRO REST API whenever the certificate is renewed.
+
+### Directory structure
+
+```text
+./
+├── netscaler.hcl                       # continuous agent config: renews cert and uploads to NetScaler
+├── templates/
+│   └── netscaler-cert.vtmpl            # Vault Agent template — writes cert + chain
+├── netscaler/
+│   ├── start-netscaler.sh              # starts the NetScaler CPX Podman container
+│   ├── upload-certs-to-netscaler.sh    # uploads cert+key via NITRO API and updates certkey object
+│   └── success.html                    # page served over HTTPS
+```
+
+Bootstrap certificates (signed by `terraform.hashicorp.ibm`, 7-day TTL) are written to `certs/` by `terraform apply` — no separate init step required.
+
+### Step 1 — Start the NetScaler CPX container
+
+```bash
+bash netscaler/start-netscaler.sh
+```
+
+[`netscaler/start-netscaler.sh`](netscaler/start-netscaler.sh) starts the `store/citrix/netscalercpx` container via Podman and mounts `certs/` read-only at `/nsconfig/ssl` — the path NetScaler uses for SSL cert and key files.
+
+Exposed endpoints:
+
+| Endpoint              | URL                           |
+| --------------------- | ----------------------------- |
+| HTTP (redirect)       | `http://localhost:9080`       |
+| HTTPS (TLS)           | `https://localhost:9443`      |
+| NITRO REST API        | `http://localhost:32080/nitro/v1/` |
+
+Default credentials: `nsroot` / `nsroot`.
+
+### Step 2 — Run continuous Vault Agent updates
+
+```bash
+vault agent -config=./netscaler.hcl #-log-level debug
+```
+
+[`netscaler.hcl`](netscaler.hcl) continuously renders [`templates/netscaler-cert.vtmpl`](templates/netscaler-cert.vtmpl) → `certs/netscaler-cert.pem` and runs [`netscaler/upload-certs-to-netscaler.sh`](netscaler/upload-certs-to-netscaler.sh) after each renewal.
+
+### Authentication options
+
+[`netscaler.hcl`](netscaler.hcl) uses `token_file` by default, reading from `.vault-token-netscaler` (written by `terraform apply`). Commented examples for Kubernetes and AWS auth are included in the file.
+
+### NetScaler upload behavior
+
+[`netscaler/upload-certs-to-netscaler.sh`](netscaler/upload-certs-to-netscaler.sh) interacts with the NetScaler NITRO REST API:
+
+1. **Login** — `POST /nitro/v1/config/login` to obtain a session cookie.
+2. **Upload files** — `PUT /nitro/v1/config/systemfile/<name>` (falls back to `POST` for first-time creation) to write `netscaler-cert.pem` and `netscaler-privkey.pem` into `/nsconfig/ssl/`.
+3. **Update certkey** — `PUT /nitro/v1/config/sslcertkey` to update (or create) the SSL certkey object named `vault-demo`, pointing to the new files. NetScaler immediately pushes the new cert material to all bound virtual servers — no rebind needed.
+4. **Save config** — `POST /nitro/v1/config/nsconfig?action=save` so the updated object survives a restart.
+
+Default environment values:
+
+| Variable               | Default     |
+| ---------------------- | ----------- |
+| `NETSCALER_HOST`       | `localhost` |
+| `NETSCALER_PORT`       | `32080`     |
+| `NETSCALER_USER`       | `nsroot`    |
+| `NETSCALER_PASSWORD`   | `nsroot`    |
+
+Files uploaded and certkey objects updated:
+
+- `certs/netscaler-cert.pem` → `/nsconfig/ssl/netscaler-cert.pem`
+- `certs/netscaler-privkey.pem` → `/nsconfig/ssl/netscaler-privkey.pem`
+- SSL certkey object: `vault-demo` (cert + key pair; `expirymonitor: ENABLED`)
+
+### How it works
+
+| File                                    | Purpose                                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `netscaler.hcl`                         | Continuous renewal + upload (bootstrap certs from `terraform apply`)                        |
+| `netscaler/start-netscaler.sh`          | Starts NetScaler CPX container via Podman, mounts `certs/` at `/nsconfig/ssl`               |
+| `netscaler/success.html`                | Static HTML page served over HTTPS                                                          |
+| `templates/netscaler-cert.vtmpl`        | Requests cert from `pki_int/issue/netscaler`, writes key + cert+chain                       |
+| `netscaler/upload-certs-to-netscaler.sh`| Uploads files via NITRO systemfile API, updates `sslcertkey` object, saves config           |
+
+### Useful commands
+
+Check a certificate:
+
+```bash
+openssl x509 -in ./certs/netscaler-cert.pem -text -noout
+```
+
+Check certificate dates:
+
+```bash
+openssl x509 -in ./certs/netscaler-cert.pem -noout -dates
+```
+
+Test the NITRO filestore endpoint:
+
+```bash
+curl -sf -X POST http://localhost:32080/nitro/v1/config/login \
+  -H "Content-Type: application/json" \
+  -c /tmp/ns.txt \
+  -d '{"login":{"username":"nsroot","password":"nsroot"}}' \
+  && curl -sf -b /tmp/ns.txt http://localhost:32080/nitro/v1/config/sslcertkey/vault-demo
+```
+
+Verify the certificate served by the live TLS endpoint:
+
+```bash
+echo "" | openssl s_client -connect localhost:9443 -showcerts 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates
+```
+
+### Troubleshooting
+
+**No certificates generated** — Verify Vault dev server is running on `http://127.0.0.1:8200`, PKI is configured via Terraform, `.vault-token-netscaler` exists, and the template references a valid PKI path. Re-run `terraform apply` from `terraform/` to regenerate both tokens and bootstrap certs.
+
+**Upload to NetScaler fails** — Verify the NetScaler CPX container is running, NITRO API is reachable on `http://localhost:32080`, credentials match the container, and cert files exist in `certs/`.
+
+**NITRO login returns 401** — The `nsroot` password may have been changed inside the container. Pass `NETSCALER_PASSWORD=<new>` when running the agent, or restart the container from scratch.
+
+---
+
 ## Port Reference
 
 All container-based flows use distinct host ports so they can run simultaneously.
 
-| Flow      | Service          | Host port | Container port |
-| --------- | ---------------- | --------- | -------------- |
-| nginx     | HTTP (redirect)  | `8080`    | `80`           |
-| nginx     | HTTPS (TLS)      | `8443`    | `443`          |
-| HAProxy   | HTTP (redirect)  | `8090`    | `8080`         |
-| HAProxy   | HTTPS (TLS)      | `8453`    | `8443`         |
-| DataPower | Web UI           | `9090`    | `9090`         |
-| DataPower | SOMA API (SOAP)  | `5550`    | `5550`         |
-| DataPower | REST Mgmt API    | `5554`    | `5554`         |
-| DataPower | Demo TLS service | `8043`    | `8043`         |
+| Flow       | Service            | Host port | Container port |
+| ---------- | ------------------ | --------- | -------------- |
+| nginx      | HTTP (redirect)    | `8080`    | `80`           |
+| nginx      | HTTPS (TLS)        | `8443`    | `443`          |
+| HAProxy    | HTTP (redirect)    | `8090`    | `8080`         |
+| HAProxy    | HTTPS (TLS)        | `8453`    | `8443`         |
+| DataPower  | Web UI             | `9090`    | `9090`         |
+| DataPower  | SOMA API (SOAP)    | `5550`    | `5550`         |
+| DataPower  | REST Mgmt API      | `5554`    | `5554`         |
+| DataPower  | Demo TLS service   | `8043`    | `8043`         |
+| NetScaler  | HTTP (redirect)    | `9080`    | `9080`         |
+| NetScaler  | HTTPS (TLS)        | `9443`    | `9443`         |
+| NetScaler  | NITRO REST API     | `32080`   | `32080`        |
 
 ---
 
@@ -424,4 +524,4 @@ terraform destroy
 ```
 
 The destroy removes all Vault resources managed by Terraform (PKI engines, roles, policies, token auth backend roles, and the minted service tokens).
-The token files (`.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`) are also removed by Terraform because they are managed as `local_sensitive_file` resources. Any remaining generated cert files can be removed with `bash ./cleanup.sh`.
+The token files (`.vault-token-datapower`, `.vault-token-nginx`, `.vault-token-haproxy`, `.vault-token-netscaler`) are also removed by Terraform because they are managed as `local_sensitive_file` resources. Any remaining generated cert files can be removed with `bash ./cleanup.sh`.

@@ -1,0 +1,4 @@
+{{- with pkiCert "pki_int/issue/netscaler" "common_name=netscaler.hashicorp.ibm" "ttl=2m" -}}
+{{- .Key | writeToFile "certs/netscaler-privkey.pem" "" "" "0600" -}}
+{{ .Cert }}{{ .CA }}
+{{- end}}

@@ -52,3 +52,13 @@ output "vault_token_haproxy_file" {
   description = "Absolute path of the token file written for the HAProxy Vault Agent."
   value       = local_sensitive_file.vault_token_haproxy.filename
 }
+
+output "netscaler_issue_path" {
+  description = "Full Vault path for issuing NetScaler certificates."
+  value       = "${vault_mount.pki_int.path}/issue/${vault_pki_secret_backend_role.netscaler.name}"
+}
+
+output "vault_token_netscaler_file" {
+  description = "Absolute path of the token file written for the NetScaler Vault Agent."
+  value       = local_sensitive_file.vault_token_netscaler.filename
+}
